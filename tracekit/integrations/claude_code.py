@@ -26,16 +26,17 @@ content) from the transcript, which no hook payload carries. A later run of the 
 tailer start where the hook last saw the transcripts while the earlier run was open (_seen), and a resumed session's
 first run where its transcript ended at SessionStart: the lines before are an earlier run's.
 
-At UserPromptSubmit the prompt as the harness submitted it is recorded too (`observe`, source <agent>:UserPromptSubmit,
-trusted): `tracekit analyze --v2` reads a transcript prompt line as the person's only when one of these has its text
-(TK-X208 flags a line none has). Each constraint the prompt states (tracekit.constraints: "don't touch X", "read-only",
-"don't push", ...) goes to the signer first, each on its own, as a live constraint (`constraint_add`), which holds a
-later call that breaks it for a person's approval; the agent reads why on stderr. A scope ("only change X") is no live
-constraint (_live): holding every other write (tests, lockfiles) would ask too often; `tracekit analyze --v2` checks
-it. The session state keeps them (written before they are sent, so an unreachable signer loses none), and a later run
-of the session (after an idle close) gets them all again. A constraint can only hold more calls, so the agent's own
-identity adding one (it could add its own) weakens nothing: past the signer's cap of file constraints a further one is
-refused and every write of the run is held from then on, which the hook tells the person (exit 1, FULL on stderr).
+At UserPromptSubmit, the typed part of the harness's prompt is recorded (`observe`, source
+<agent>:UserPromptSubmit, trusted); harness-wrapped parts are separate untrusted observations. `tracekit analyze --v2`
+reads a transcript prompt line as the person's only when one of these has its typed text (TK-X208 flags a line none
+has). Each constraint the typed part states (tracekit.constraints: "don't touch X", "read-only", "don't push", ...) goes
+to the signer first, each on its own, as a live constraint (`constraint_add`), which holds a later call that breaks it
+for a person's approval; the agent reads why on stderr. A scope ("only change X") is no live constraint (_live): holding
+every other write (tests, lockfiles) would ask too often; `tracekit analyze --v2` checks it. The session state keeps
+them (written before they are sent, so an unreachable signer loses none), and a later run of the session (after an idle
+close) gets them all again. A constraint can only hold more calls, so the agent's own identity adding one (it could add
+its own) weakens nothing: past the signer's cap of file constraints a further one is refused and every write of the run
+is held from then on, which the hook tells the person (exit 1, FULL on stderr).
 
 System mode: the signer runs as its own user and the hook reaches it only through the socket the root-owned
 /etc/tracekit/client.json names (a TRACEKIT_SIGNER naming another is refused, and the call blocked); the signer
@@ -50,12 +51,14 @@ import glob
 import hashlib
 import json
 import os
+import re
 import shlex
 import stat
 import subprocess
 import sys
 import time
 import uuid
+from collections import deque
 
 from tracekit import constraints, privacy
 from tracekit.client import system_config
@@ -64,6 +67,7 @@ from tracekit.format.canon import event_hash
 from tracekit.locking import lock_file
 from tracekit.sdk import autospawn
 from tracekit.sdk.client import Client, RunHandle, SignerUnavailable, fail_open, named_rules, sendable
+from tracekit.signer.quotas import MAX_LINE
 from tracekit.signer.rpc_schema import RPCError
 
 AGENT = "claude-code"
@@ -365,6 +369,178 @@ def _live(prompt):
     return [(kind, obj and obj[:256]) for kind, obj in constraints.extract(prompt) if kind != "only_change"]
 
 
+_WRAPPER_SOURCES = {
+    "agent-message": "agent-message",
+    "artifact-file-content": "artifact-file-content",
+    "artifact-origin-notes": "artifact-origin-notes",
+    "artifact-stored-declaration": "artifact-stored-declaration",
+    "artifact-type-instructions": "artifact-type-instructions",
+    "bash-exit-code": "bash-output",
+    "bash-input": "person-command",
+    "bash-stderr": "bash-output",
+    "bash-stdout": "bash-output",
+    "channel": "channel",
+    "command-args": "command",
+    "command-message": "command",
+    "command-name": "command",
+    "coordinator-relay": "coordinator-relay",
+    "cowritten-artifact-html": "cowritten-artifact-html",
+    "cross-session-message": "session-message",
+    "fetched-web-content": "fetched-web-content",
+    "function_results": "function-results",
+    "local-command-caveat": "local-command-caveat",
+    "local-command-stderr": "local-command-stderr",
+    "local-command-stdout": "bash-output",
+    "persisted-output": "persisted-output",
+    "remote-review": "remote-review",
+    "sandbox_violations": "sandbox-violations",
+    "slack-ping": "slack-ping",
+    "slack-tag-message": "slack-tag-message",
+    "system-reminder": "system-reminder",
+    "system_reminder": "system-reminder",
+    "task-notification": "task-notification",
+    "teammate-message": "teammate-message",
+    "tick": "tick",
+    "tool_use_error": "tool-use-error",
+    "total_tokens": "total-tokens",
+    "ultraplan": "ultraplan",
+    "user-prompt-submit-hook": "user-prompt-submit-hook",
+    "untrusted-uploads": "uploads",
+    "wake": "external-event",
+}
+FRAME_TEXT = MAX_LINE - 4112
+MAX_HARNESS_TEXT = FRAME_TEXT * 48
+FRAME_OVERLAP = 2048
+# lean: Wrapper spellings are harness details. An unrecognised wrapper is recorded as typed; Claude Code's paste-tag
+# scrub, not its 16-bit session-shared paste id, keeps a pasted body from forging this boundary. Add observed spellings
+# when a harness changes; upgrade to a signed harness-provided trust boundary if that stops being sufficient.
+
+
+@functools.lru_cache(maxsize=2)
+def _wrapped(agent):
+    if agent == "claude-code":
+        tags = "|".join(re.escape(tag) for tag in _WRAPPER_SOURCES)
+        return re.compile(
+            r'<pasted_content\s+id="([^"\s>]{1,128})">'
+            r'|<pasted_content\b'
+            r'|\[SYSTEM NOTIFICATION - NOT USER INPUT\]'
+            r'|\[SCHEDULED TASK - AUTOMATED FIRING OF A CONFIGURED PROMPT\]'
+            r'|(?:(?:Another Claude session|A peer session|The coordinator) sent a message'
+            r'(?: while you were working)?:\s*)?'
+            rf'<({tags})[\s>]'
+            r'|(?:Another Claude session|A peer session|The coordinator) sent a message'
+            r'(?: while you were working)?:'
+            r'|Base directory for this skill:', re.IGNORECASE)
+    if agent == "gemini-cli":
+        return re.compile(r'--- Content from referenced files ---')
+    return re.compile(r'(?!)')
+
+
+def prompt_parts(prompt, agent=None):
+    """Return (person-typed text, [(source, untrusted text)]) from a harness prompt."""
+    agent = AGENT if agent is None else agent
+    typed, parts, pos = [], [], 0
+    wrapped = _wrapped(agent)
+    while match := wrapped.search(prompt, pos):
+        start = match.start()
+        tag = (match.group(2) if match.lastindex and match.lastindex >= 2 else "") or ""
+        tag = tag.lower()
+        typed.append(prompt[pos:start])
+        ident = match.group(1) if match.lastindex else None
+        if ident:
+            # Claude Code's scrub prevents a pasted body or typed text from forging its 16-bit session-shared id.
+            close = f'</pasted_content id="{ident}">'
+            at = prompt.find(close, match.end())
+            if at >= 0:
+                end = at + len(close)
+                parts.append(("paste", prompt[start:end], start))
+                pos = end
+                continue
+        if tag:
+            source = _WRAPPER_SOURCES[tag]
+        elif match.group(0).lower().startswith("<pasted_content"):
+            source = "paste"
+        elif match.group(0).lower().startswith("base directory"):
+            source = "skill"
+        elif agent == "gemini-cli":
+            source = "referenced-file"
+        elif "sent a message" in match.group(0).lower():
+            source = "peer-message"
+        else:
+            source = "scheduled-task" if match.group(0).lower().startswith("[scheduled") else "system-notification"
+        parts.append((source, prompt[start:], start))
+        break
+    else:
+        typed.append(prompt[pos:])
+    return "".join(typed), parts
+
+
+def _observe_value(values):
+    """The largest prefix of untrusted `values` that leaves room for the observe frame."""
+    limit = MAX_LINE - 4096  # run token, stream and source leave a small, bounded envelope
+
+    def fits(value):
+        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()) <= limit
+
+    if fits(values):
+        return values
+    lo, hi = 0, len(values)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if fits(values[:mid]):
+            lo = mid
+        else:
+            hi = mid - 1
+    if lo:
+        return values[:lo]
+    value = values[0]
+    lo, hi = 0, len(value)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if fits([value[:mid]]):
+            lo = mid
+        else:
+            hi = mid - 1
+    return [value[:lo]]
+
+
+def _observe_values(values, limit=MAX_HARNESS_TEXT):
+    """Yield bounded observe frames, cutting long values at whitespace where possible."""
+    values = deque(values)
+    while values and limit > 0:
+        frame, size = [], 0
+        while values and limit > 0:
+            value = values.popleft()
+            room = min(FRAME_TEXT - size, limit)
+            if not room:
+                values.appendleft(value)
+                break
+            end = min(len(value), room)
+            split = end < len(value)
+            if split:
+                boundary = max(value.rfind(c, 0, end) for c in " \t\n")
+                if boundary >= end // 2:
+                    end = boundary + 1
+            frame.append(value[:end])
+            size, limit = size + end, limit - end
+            if value[end:]:   # the overlap is sent again, uncharged under the cap: a part's whole text fits its share
+                back = min(FRAME_OVERLAP, end // 2)
+                values.appendleft(value[end - back:])
+                if limit > 0:
+                    limit += back
+                break
+            if split or size == FRAME_TEXT or not limit:
+                break
+        chunk = _observe_value(frame)   # cut to the frame's bytes: text that isn't ASCII takes more than one each
+        rest = frame[len(chunk):]
+        if chunk and len(chunk[-1]) < len(frame[len(chunk) - 1]):   # its last item was cut: the rest goes back, with
+            kept = len(chunk[-1])                                     # an overlap so a value across the cut stays whole
+            rest.insert(0, frame[len(chunk) - 1][kept - min(FRAME_OVERLAP, kept // 2):])
+        values.extendleft(reversed(rest))
+        limit += sum(map(len, rest))
+        yield chunk
+
+
 def prompted(run, prompt):
     """Each live constraint `prompt` states (_live), as a live constraint of `run`, each on its own (module
     docstring). -> whether the signer took one only as a refusal past its cap (_constrain)."""
@@ -425,12 +601,12 @@ def _tool_class(tool):
     return load_policy().tool_class(tool)
 
 
-def _handle(client, p, name, sid, tid):
-    if name == "PreToolUse":
+def _handle(client, p, event, sid, tid):
+    if event == "PreToolUse":
         return _pre(client, p, sid, tid)
-    if name in TOOL_EVENTS:
+    if event in TOOL_EVENTS:
         return _post(client, p, sid, tid)
-    if name == "SessionEnd":   # not at Stop: a background subagent's call may still be running then
+    if event == "SessionEnd":   # not at Stop: a background subagent's call may still be running then
         _unfinished(client, sid)
         run, _ = _run(client, sid, register=False)
         try:
@@ -445,19 +621,70 @@ def _handle(client, p, name, sid, tid):
         for f in glob.glob(glob.escape(_state(sid)[:-len(".json")]) + "*"):
             os.remove(f)
         return 0
-    transcript, prompt = None, p.get("prompt") if name == "UserPromptSubmit" else None
-    if name == "SessionStart":
+    transcript, prompt = None, p.get("prompt") if event == "UserPromptSubmit" else None
+    if event == "SessionStart":
         _prune()
         transcript = p.get("transcript_path") if isinstance(p.get("transcript_path"), str) else None
-    if isinstance(prompt, str) and prompt:   # the harness's own copy of what the person typed
+    if isinstance(prompt, str) and prompt:   # the harness's submitted prompt, including harness wrappers
+        typed, wrapped = prompt_parts(prompt)
+        stated = _live(typed)
+        live = set(stated)
+        unexpected = {}
+        if AGENT == "claude-code":
+            for source, value, start in wrapped:
+                continuation = source == "ultraplan" and prompt[:start].lower().endswith(
+                    "remote agent content enclosed in ")
+                if not continuation:
+                    for constraint in _live(re.sub(r"<[^<>]*>", "", value[:constraints.MAX_TEXT])):
+                        if constraint not in live:
+                            unexpected.setdefault(constraint, source)
         try:   # its constraints first: a prompt too large for one observe frame still adds them
-            refused = _run(client, sid, stated=_live(prompt))[1]
+            refused = _run(client, sid, stated=stated)[1]
         finally:
-            _run(client, sid, send="observe", source=f"{AGENT}:UserPromptSubmit", trust="trusted", value=prompt)
+            errors = []
+            try:
+                _run(client, sid, send="observe", source=f"{AGENT}:UserPromptSubmit", trust="trusted", value=typed)
+            except Exception as e:
+                errors.append(e)
+            grouped = {}
+            for source, value, _ in wrapped:
+                grouped.setdefault(source, []).append(value)
+            cut, sources = [], list(grouped.items())
+            for index, (source, values) in enumerate(sources):
+                text_size = sum(map(len, values))
+                share, extra = divmod(MAX_HARNESS_TEXT, len(sources))
+                recorded = min(text_size, share + (index < extra))
+                for value in _observe_values(values, recorded):
+                    try:
+                        _run(client, sid, send="observe", source=f"{AGENT}:{source}", trust="untrusted", value=value)
+                    except Exception as e:
+                        errors.append(e)
+                if recorded < text_size:
+                    cut.append(source)
+            if errors:
+                raise errors[0]
+        messages = []
+        if unexpected and AGENT == "claude-code":
+            sources = ", ".join(sorted(set(unexpected.values())))
+            names = sorted(f"keep away from {obj}" if kind == "keep_away" else
+                           {"read_only": "read-only", "no_push": "don't push", "no_network": "no network"}[kind]
+                           for kind, obj in unexpected)
+            shown, more = names[:3], len(names) - 3
+            detail = ", ".join(shown) + (f" and {more} more" if more > 0 else "")
+            messages.append(f"[tracekit] {len(unexpected)} constraint(s) in text the harness added "
+                            f"({sources}: {detail}) were recorded, not made live")
+        if cut:
+            _run(client, sid, send="observe", source=f"{AGENT}:harness-cut", trust="untrusted",
+                 value=f"Harness text was cut after {MAX_HARNESS_TEXT} characters ({', '.join(cut)}).")
+            messages.append(f"[tracekit] oversized untrusted text was cut after {MAX_HARNESS_TEXT} characters "
+                            f"({', '.join(cut)}); values in the cut text are not marked untrusted, so a "
+                            f"from: untrusted rule won't hold a call that uses them")
+        if messages and AGENT == "claude-code":
+            print(json.dumps({"systemMessage": "\n".join(messages)}))
         return 1 if refused else 0   # shown to the person (FULL, on stderr), never blocking the prompt
     # SessionStart, or any other first event of the session, registers the run; a resumed (or forked) session's
     # transcript holds its earlier history, which earlier runs recorded
-    _run(client, sid, transcript=transcript, resumed=name == "SessionStart" and p.get("source") in RESUMED)
+    _run(client, sid, transcript=transcript, resumed=event == "SessionStart" and p.get("source") in RESUMED)
     return 0
 
 

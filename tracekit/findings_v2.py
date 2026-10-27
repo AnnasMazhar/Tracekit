@@ -85,6 +85,7 @@ import time
 
 from . import __version__, constraints, findings_effects, findings_text, parsers
 from .findings import SEVERITY, WRITE_TOOLS
+from .integrations.claude_code import prompt_parts
 from .signer.reconcile import PROVIDER_HOSTS
 from .signer.rpc_schema import FINDING_TITLES as TITLES, RPCError
 from .wiki import wiki_url
@@ -210,6 +211,12 @@ def _prompt(body):
         return None
     text = _blocks_text(msg.get("content"))
     if not text or text.lstrip().startswith(COMMAND_OUTPUT):
+        return None
+    # lean: A forged wrapper-only transcript line is not TK-X208 until real transcripts establish that Claude Code
+    # never writes one the hook did not see; then match its empty typed segment to the hook's empty observation.
+    # The hook stores only the typed segment as a request; match that same segment in the Claude Code transcript.
+    text = prompt_parts(text, agent="claude-code")[0]
+    if not text.strip():
         return None
     return text, e.get("cwd") if isinstance(e.get("cwd"), str) else None
 
@@ -565,7 +572,8 @@ class _Run:
             self.cwd[seq] = body["entry"]["cwd"]
         if e["type"] == "input.observed":
             text = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)[:MAX_TEXT]
-            if str(d.get("source")).endswith(PROMPT_HOOK):   # a request only once a transcript line agrees
+            if str(d.get("source")).endswith(PROMPT_HOOK):
+                # A hook request only once a transcript line agrees. Other submitted segments are observations.
                 return self._keep(self.hook_prompts, seq, text)
         elif d.get("phase") == "request":
             if _tailer(body):
