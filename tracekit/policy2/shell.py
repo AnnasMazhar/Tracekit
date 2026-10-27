@@ -155,6 +155,40 @@ def analyse(command):
     ctx = {"cmds": [], "lines": [], "refs": [], "written": [], "kept": [], "cut": [], "steps": [], "redefined": set(),
            "command_names_mutable": False,
            "pipes": 0, "depth": 0, "work": 0, "exp": 0}
+    # A literal can become an arithmetic variable name on the same line. Read
+    # substitutions inside its array index when that line has an arithmetic
+    # evaluation context; bash re-expands that index while evaluating it.
+    arithmetic = re.compile(r"\$\(\(|\(\(|\blet\b|\b(?:declare|local|typeset)\b[^\n]*\s-i\b|\$\{[A-Za-z_][A-Za-z0-9_]*\[")
+    for line in command.splitlines():
+        has_context = any(marker in line for marker in ("$((", "((", "let ", "declare ", "local ", "typeset ", "${"))
+        test_open = line.find("[[")
+        has_test_context = test_open >= 0 and any(line.find(op, test_open + 2) >= 0 for op in ("-eq", "-ne", "-lt", "-le", "-gt", "-ge"))
+        if (has_context and arithmetic.search(line)) or has_test_context:
+            literals = list(_STR.finditer(line))
+            i = 0
+            while i < len(line):
+                m = re.search(r"(?<![\w'\"])[A-Za-z_][A-Za-z0-9_]*\[", line[i:])
+                if not m:
+                    break
+                start = i + m.start()
+                end = line.find("]", i + m.end())
+                if end < 0:
+                    break
+                word = line[start:end + 1]
+                if "$" in word or "`" in word:
+                    literals.append((start, end + 1, word))
+                i = end + 1
+            for literal in literals:
+                text = literal.group(2) if hasattr(literal, "re") else literal[2]
+                if not re.search(r"[A-Za-z_][A-Za-z0-9_]*\[[^]]*(?:\$\(|`)", text):
+                    continue
+                for match in re.finditer(r"\$\(|`", text):
+                    parser = _Parser(text, ctx, ["arithmetic subscript"])
+                    parser.i = match.start()
+                    if text.startswith("$(", parser.i):
+                        parser.dollar(False)
+                    else:
+                        parser.backtick()
     _Parser(command, ctx, []).script()
     active = False
     for step in reversed(ctx["steps"]):
@@ -904,6 +938,15 @@ class _Parser:
                              "$(( that is not arithmetic (a subshell inside $( )) is not supported")
         body = s[start:self.i]
         self.charge(len(body))   # each level reads the levels inside it again
+        # Bash expands an arithmetic array index a second time. If parameter
+        # expansion can build a substitution there, the resulting program is
+        # not present for this parser to read.
+        subscript = re.search(r"\[[^\]]*\]", body)
+        if subscript:
+            index = subscript.group()
+            plain_parameters = re.sub(r"\$\{[^{}]*\}|\$[A-Za-z_][A-Za-z0-9_]*", "", index)
+            if "$" in plain_parameters or "`" in index or re.search(r"\$\{[^{}]*\$\}\s*\(", index):
+                raise ParseError("an expandable command in an arithmetic subscript is not supported")
         parens, level = re.findall(r"[()]", body), 0
         for p in parens:
             level += 1 if p == "(" else -1
@@ -973,7 +1016,11 @@ class _Parser:
                 k += 1
             if k != j - 1:
                 raise ParseError("$(( that is not arithmetic (a subshell inside $( )) is not supported")
-            if "$(" in s[self.i + 3:j] or "`" in s[self.i + 3:j]:
+            arithmetic_body = s[self.i + 3:j]
+            possible_subscript = re.sub(r"\$\{[^{}]*\}|\$[A-Za-z_][A-Za-z0-9_]*", "", arithmetic_body)
+            builds_substitution = re.search(r"\$\{[^{}]*\$\}\s*\(", arithmetic_body)
+            if "$(" in arithmetic_body or "`" in arithmetic_body or (
+                    "[" in arithmetic_body and ("$" in possible_subscript or builds_substitution)):
                 self.i += 3
                 self.arith()
             else:

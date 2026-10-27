@@ -842,6 +842,31 @@ class Shell(unittest.TestCase):
             with self.subTest(cmd=cmd), self.assertRaises(shell.ParseError):
                 shell.parse(cmd)
 
+    def test_arithmetic_subscript_expansions_are_read_or_held(self):
+        for cmd in ("echo $(( a[${x:-$}(sudo id)] ))", "echo $(( a[${x:-`sudo id`}] ))",
+                    "echo $(( a[\\`sudo id\\`] ))"):
+            with self.subTest(cmd=cmd):
+                with self.assertRaises(shell.ParseError):
+                    shell.parse(cmd)
+        for cmd in ("v='a[$(sudo id)]'; echo $((v))", 'v="a[$(sudo id)]"; echo $((v))',
+                    "v=a[$(sudo id)]; echo $((v))", "let 'v=a[$(sudo id)]'",
+                    "v=a[`sudo id`]; echo $((v))",
+                    "(( v=a[$(sudo id)] ))", "declare -i v='a[$(sudo id)]'",
+                    "[[ x -eq a[$(sudo id)] ]]"):
+            with self.subTest(cmd=cmd):
+                try:
+                    parsed = shell.parse(cmd)
+                except shell.ParseError:
+                    continue
+                self.assertIn(["sudo", "id"], [command["argv"] for command in parsed])
+        for cmd in ("echo $(( i + 1 ))", "echo $(( a[1] ))", "echo $(( ${#arr[@]} - 1 ))",
+                    "echo $(( ${arr[0]} * 2 ))", "echo $(( $n / 2 ))", "echo $(( $(nproc) * 2 ))"):
+            for pack in ("coding.yaml", "dev.yaml", "server.yaml", "strict.yaml"):
+                pol = pc.build(os.path.join(PACKS, pack))[0]
+                for policy_engine in (Engine(pol, "re2"), Engine(pol, "regex")):
+                    with self.subTest(pack=pack, cmd=cmd):
+                        self.assertNotIn("TK-SHELL-PARSE", policy_engine.decide("Bash", {"command": cmd})["rule_ids"])
+
     def test_arithmetic_expansion_without_a_substitution_is_skipped_as_before(self):
         """With no `$(` or backtick in it, `$(( ))` is skipped unread as before the substitutions in it were read:
         its quotes, backslashes, parentheses and newlines are not held."""
@@ -879,6 +904,27 @@ class Shell(unittest.TestCase):
                 with self.assertRaises(shell.ParseError):
                     shell.parse(cmd)
                 self.assertLess(best(cmd), 2 * SLOWER)
+
+    def test_arithmetic_context_prescan_is_linear(self):
+        timings = [[], [], []]
+        makers = (lambda n: "-eq " + "[[x]] " * (n // 6),
+                  lambda n: "$( ( " + "a[ " * (n // 3),
+                  lambda n: '"' + '"' * n)
+        for maker, samples in zip(makers, timings):
+            for size in (MAX_SUBJECT // 4, MAX_SUBJECT // 2, MAX_SUBJECT):
+                cmd = maker(size)
+                runs = []
+                for _ in range(3):
+                    start = time.perf_counter()
+                    try:
+                        shell.parse(cmd)
+                    except shell.ParseError:
+                        pass
+                    runs.append(time.perf_counter() - start)
+                samples.append(min(runs))
+            # linear: 4 times the text takes about 4 times as long (quadratic would be 16)
+            self.assertLess(samples[2], 8 * samples[0] + 0.005 * SLOWER)
+            self.assertLess(samples[2], 0.5 * SLOWER)
 
     def test_nested_reparsed_consumers_are_bounded(self):
         cmd = 'eval "$(id)" "$(id)"'
