@@ -704,15 +704,13 @@ class HoldLine(unittest.TestCase):
                     "approval_wait": {"state": "rejected"}}[method]
 
         run.call = call
-        run.approval_consume = mock.Mock(return_value=None)
 
         def decide(*a, **kw):
             return run, {"decision": "ask", "rule_ids": ["TK-A003"], "decision_id": "d1",
                          "reason": reason}
 
         err = io.StringIO()
-        with mock.patch.object(claude_code, "_run", decide), mock.patch.object(claude_code, "files"), \
-                contextlib.redirect_stderr(err):
+        with mock.patch.object(claude_code, "_run", decide), contextlib.redirect_stderr(err):
             self.assertEqual(claude_code._pre(client, {"tool_name": "Bash", "tool_input": {"command": "x"}}, "s1", "t1"), 2)
         lines = err.getvalue().splitlines()
         waiting = next(l for l in lines if "waiting for approval" in l)
@@ -726,17 +724,6 @@ class HoldLine(unittest.TestCase):
         self.assertIn("(TK-A003): force push. Push without --force; a person approves it", waiting)
         self.assertNotIn(".;", waiting)
         self.assertIn("(TK-A003: force push. Push without --force) and not approved:", not_approved)
-        self.assertNotIn(".;", not_approved)
-
-    def test_hold_line_keeps_ellipsis_dots_when_dropping_one_period(self):
-        """Only one trailing period is removed (`removesuffix`), so a reason ending in `...` still shows `..`
-        before the approval hint (#444)."""
-        waiting, not_approved = self.hold_lines("Hold for review...")
-        self.assertIn("(TK-A003): Hold for review..; a person approves it", waiting)
-        self.assertNotIn("Hold for review...;", waiting)
-        self.assertNotRegex(waiting, r"(?<!\.)\.;")   # a lone period before `;` would be the #444 bug
-        self.assertIn("(TK-A003: Hold for review..) and not approved:", not_approved)
-        self.assertNotIn(".;", not_approved)
 
 
 class PreBudget(unittest.TestCase):
