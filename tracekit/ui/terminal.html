@@ -3737,12 +3737,14 @@
     }
     // high alerts: the ticker's and the ALERTS panel's count are one number
     const highCount = () => S.alerts.filter(a => a.sev === "high").length + whyAlerts().filter(a => a.severity === "high").length;
+    // the count of verified runs: muted, and saying so, while the viewer checks nothing (STOPPED)
+    const verifiedCount = k => `<span class="${esc(STOPPED ? "dim" : "s-ok")}" title="${esc(STOPPED)}">${esc(k + " verified" + (STOPPED ? " · checks stopped" : ""))}</span>`;
     function renderRuns() {
       const all = [...RUNS.values()].sort((x, y) => String(y.first_ts || "").localeCompare(String(x.first_ts || "")));
       // a run's page: its family, the run that started it all and every run started from there (its agents)
       const fam = PAGE === "run" && scope && family(scope), list = fam ? all.filter(r => fam.has(r.id)) : all;
       const n = v => list.filter(r => r.verdict === v).length;
-      let html = fam ? "" : `<div class="run${scope ? "" : " sel"}" data-run="" tabindex="0"><span class="nm">ALL RUNS</span><span></span><span class="meta"><span>${esc(list.length)} runs</span><span class="s-ok">${esc(n("verified"))} verified</span>${n("failed") ? `<span class="s-err">${esc(n("failed"))} failed</span>` : ""}${n("pending") ? `<span class="s-run">${esc(n("pending"))} pending</span>` : ""}${n("error") ? `<span class="s-err">${esc(n("error"))} not checked</span>` : ""}</span></div>`;
+      let html = fam ? "" : `<div class="run${scope ? "" : " sel"}" data-run="" tabindex="0"><span class="nm">ALL RUNS</span><span></span><span class="meta"><span>${esc(list.length)} runs</span>` + verifiedCount(n("verified")) + `${n("failed") ? `<span class="s-err">${esc(n("failed"))} failed</span>` : ""}${n("pending") ? `<span class="s-run">${esc(n("pending"))} pending</span>` : ""}${n("error") ? `<span class="s-err">${esc(n("error"))} not checked</span>` : ""}</span></div>`;
       for (const [r, depth] of treeOrder(list, r => r.id, r => r.parent)) {
         const d = r.decisions || {}, t0 = Date.parse(r.first_ts) / 1000, t1 = Date.parse(r.last_ts) / 1000;
         const gaps = Object.values(r.gaps || {}).reduce((x, y) => x + y, 0), calls = Object.values(d).reduce((x, y) => x + y, 0);
@@ -4362,7 +4364,7 @@
       if (r.verdict !== "verified") return "Pending: no checkpoint covers this run's last record yet.";
       const acts = S.actList, held = acts.filter(a => a.v2?.decision === "ask"), by = new Map();
       for (const a of held) { const w = (ANSWER[lastAnswer(a)] || (ended(a) ? "not answered" : "waiting")).toLowerCase(); by.set(w, (by.get(w) || 0) + 1); }
-      let out = "Verified. " + plural(acts.length, "call") + (acts.length ? `: ${acts.filter(a => a.post).length} ran, ${acts.filter(a => a.denied).length} blocked, ${held.length} held` + (held.length ? " (" + [...by].map(([w, n]) => n + " " + w).join(", ") + ")" : "") : "") + ".";
+      let out = "Verified" + (STOPPED ? " · checks stopped" : "") + ". " + plural(acts.length, "call") + (acts.length ? `: ${acts.filter(a => a.post).length} ran, ${acts.filter(a => a.denied).length} blocked, ${held.length} held` + (held.length ? " (" + [...by].map(([w, n]) => n + " " + w).join(", ") + ")" : "") : "") + ".";
       const fs = S.recs.filter(x => x.v2?.finding?.kind === "finding"), hi = fs.filter(x => x.severity === "high").length;
       if (r.findings || fs.length) out += fs.length ? " " + plural(fs.length, "finding") + (hi ? `, ${hi} high` : "") + "." : r.findings?.not_checkable?.length ? " No findings in what could be checked." : " No findings.";
       return out;

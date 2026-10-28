@@ -1194,24 +1194,27 @@ class RunChip(unittest.TestCase):
 
     def test_every_verified_indicator_reads_checks_stopped_while_the_viewer_checks_nothing(self):
         """The run chip said checks stopped, but the verdict chips (run header, RUNS, panel 1, a call's detail, the run
-        review), EVIDENCE's stamp and HORIZON's HUD still read a green VERIFIED."""
+        review), EVIDENCE's stamp, HORIZON's HUD, ALL RUNS' count and the review's summary still read VERIFIED."""
         needs_node(self)
-        out = json.loads(page_js(["esc", "vchip", "tuid", "WALK_MAX", "evidenceOf", "hzChain"], """
-            const S = { actions: new Map() }, seen = [];
+        out = json.loads(page_js(["esc", "vchip", "tuid", "WALK_MAX", "evidenceOf", "hzChain", "plural", "verifiedCount",
+                                  "runSentence"], """
+            const S = { actions: new Map(), actList: [], recs: [] }, seen = [];
             let STOPPED = "";
             for (const s of ["", "verification stopped: the store can't be checked"]) {
               STOPPED = s;
               seen.push([vchip("verified", "VERIFIED"), vchip("failed"), evidenceOf({ verdict: "verified" }, []).stamp,
-                         hzChain([{ gr: "signed" }])]);
+                         hzChain([{ gr: "signed" }]), verifiedCount(3), runSentence({ verdict: "verified" })]);
             }
             process.stdout.write(JSON.stringify(seen));"""))
         self.assertEqual(out[0], ['<span class="vchip verified" title="VERIFIED">VERIFIED</span>',
                                   '<span class="vchip failed" title="">FAILED</span>', ["ok", "VERIFIED"],
-                                  ["\u2713 VERIFIED", "ok"]])
+                                  ["\u2713 VERIFIED", "ok"], '<span class="s-ok" title="">3 verified</span>', "Verified. 0 calls."])
         self.assertEqual(out[1], ['<span class="vchip stopped" title="VERIFIED \u00b7 verification stopped: the store can&#39;t '
                                   'be checked">VERIFIED \u00b7 CHECKS STOPPED</span>',
                                   '<span class="vchip failed" title="">FAILED</span>', ["wait", "VERIFIED \u00b7 CHECKS STOPPED"],
-                                  ["\u2713 VERIFIED \u00b7 CHECKS STOPPED", "warn"]])
+                                  ["\u2713 VERIFIED \u00b7 CHECKS STOPPED", "warn"],
+                                  '<span class="dim" title="verification stopped: the store can&#39;t be checked">3 verified \u00b7 '
+                                  'checks stopped</span>', "Verified \u00b7 checks stopped. 0 calls."])
         # every verdict chip the page draws is vchip's: none builds its own from the verdict
         self.assertEqual(PAGE.count('class="vchip ${esc('), 1)
         self.assertEqual(len(re.findall(r"\bvchip\(\w+\.verdict", PAGE)), 5)
