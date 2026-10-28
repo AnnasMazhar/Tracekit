@@ -3,16 +3,24 @@
 > **Experimental:** this works and is tested, but may change and gets less hardening than the [stable core](support.md).
 
 ```bash
-tracekit init --dev --agent codex      # ~/.codex/hooks.json
-tracekit init --dev --agent cursor     # ~/.cursor/hooks.json
-tracekit init --dev --agent gemini     # ~/.gemini/settings.json
-tracekit init --dev --agent qwen       # ~/.qwen/settings.json
-tracekit init --dev --agent droid      # ~/.factory/hooks.json
-tracekit init --dev --agent opencode   # $XDG_CONFIG_HOME (or ~/.config)/opencode/plugin/tracekit.js; system mode: the agent's ~/.config
-tracekit init --dev --agent goose      # ~/.agents/plugins/tracekit/hooks/hooks.json (plus plugin.json beside it)
-tracekit init --dev --agent antigravity   # ~/.gemini/config/hooks.json (see Antigravity CLI below)
+tracekit init --dev --v2 --agent codex      # ~/.codex/hooks.json
+tracekit init --dev --v2 --agent cursor     # ~/.cursor/hooks.json
+tracekit init --dev --v2 --agent gemini     # ~/.gemini/settings.json
+tracekit init --dev --v2 --agent qwen       # ~/.qwen/settings.json
+tracekit init --dev --v2 --agent droid      # ~/.factory/hooks.json
+tracekit init --dev --v2 --agent opencode   # $XDG_CONFIG_HOME (or ~/.config)/opencode/plugin/tracekit.js; system mode: the agent's ~/.config
+tracekit init --dev --v2 --agent goose      # ~/.agents/plugins/tracekit/hooks/hooks.json (plus plugin.json beside it)
+tracekit init --dev --v2 --agent antigravity   # ~/.gemini/config/hooks.json (see Antigravity CLI below)
 # --project writes the project-level file instead; tracekit uninstall --agent X removes Tracekit's hooks and keeps your other settings
-tracekit demo --agent codex            # the scripted demo, sent as Codex's own hook payloads (also cursor, gemini)
+sudo tracekit init --v2 --user AGENT --agent codex       # system mode: the signer as its own user
+```
+
+These hooks record to the v2 signer ([below](#on-the-v2-signer)), and a v2 hook replaces a v1 one. The v1 hooks, for
+the older laptop path (the `tracekitd` signer), are the same commands without `--v2` and write the same files:
+
+```bash
+tracekit init --dev --agent codex      # v1; or cursor, gemini, qwen, droid, opencode, goose, antigravity
+tracekit demo --agent codex            # the scripted v1 demo, sent as Codex's own hook payloads (also cursor, gemini)
 ```
 
 For Codex, Cursor, Gemini CLI and Qwen Code the installer merges into existing settings: other hooks and settings are kept, a
@@ -23,9 +31,9 @@ plugin and refuses to overwrite a file it did not install (in `plugin/`, which e
 read `plugins/`). For goose it writes its own plugin directory (`plugin.json` plus `hooks/hooks.json`) and refuses
 to install into a plugin whose `plugin.json` is not Tracekit's. A goose rule carries no matcher (goose silently skips
 a rule whose matcher is a bare `*`, which is an invalid regex); the PreToolUse action carries `timeout: 600` and
-`on_failure: block`, the post-tool actions `timeout: 30`. For Antigravity CLI it adds a hook named `tracekit` to agy's `hooks.json` ([below](#antigravity-cli)). Every hook calls `python -I -m tracekit.agent_hooks <agent>` (OpenCode's plugin and Antigravity CLI's commands add the event),
+`on_failure: block`, the post-tool actions `timeout: 30`. For Antigravity CLI it adds a hook named `tracekit` to agy's `hooks.json` ([below](#antigravity-cli)). Every v1 hook calls `python -I -m tracekit.agent_hooks <agent>` (OpenCode's plugin and Antigravity CLI's commands add the event),
 which translates the harness's payload into the Claude Code hook shape and runs the same pipeline as the Claude Code
-hook.
+hook ([v2 hooks](#on-the-v2-signer)).
 
 | | Codex CLI | Cursor | Gemini CLI | OpenCode | goose | Qwen Code | Factory Droid |
 |---|---|---|---|---|---|---|---|
@@ -64,7 +72,7 @@ from Gemini CLI's. An allowed call with no `PostToolUse` (declined in Droid's pe
 patch in `input`; that field and format come from the tool listing, not a captured hook payload. The minimum Droid version is unknown, and it is unknown whether `Task`-started sub-droids fire hooks. Native Windows and live authenticated Droid sessions are untested; its transcript format is
 not read for model text or reasoning.
 
-An unparseable payload or an unknown harness name is reported on stderr and the call is allowed, unless
+With a v1 hook, an unparseable payload or an unknown harness name is reported on stderr and the call is allowed, unless
 `TRACEKIT_FAIL_CLOSED=1` or the policy says `fail_mode: closed`. Three exceptions block the call whatever the fail mode:
 an OpenCode call its hook can't decide (the plugin passes the model's arguments before OpenCode checks them), an
 Antigravity CLI pre-tool call its hook can't decide (its command names the event), and, in every hook, a payload
@@ -72,12 +80,7 @@ nested too deep to read.
 
 ## On the v2 signer
 
-```bash
-tracekit init --dev --v2 --agent codex                   # or cursor, gemini, opencode, goose, qwen, droid, antigravity; replaces a v1 hook
-sudo tracekit init --v2 --user AGENT --agent codex       # system mode: the signer as its own user
-```
-
-The hooks run `python -I -m tracekit.integrations.harness_hooks <agent> <event>`: the same mapping as above, then the
+The v2 hooks (the commands at the top of this page) run `python -I -m tracekit.integrations.harness_hooks <agent> <event>`: the same mapping as above, then the
 v2 Claude Code hook's core (the signer decides; approvals; the run's fail mode, closed by default and always closed in
 system mode). Unlike v1, a payload without a session or tool call id blocks the call, and so does any hook error.
 On any other event (a prompt, a tool result, a session event) a hook that fails exits 1, not 2, which
