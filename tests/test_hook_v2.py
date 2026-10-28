@@ -1021,7 +1021,9 @@ class InitV2(unittest.TestCase):
                                            text=True, timeout=30)
                     self.assertEqual(p.returncode, 1, (module, run))
                 self.assertIn("event not recorded", p.stderr)
-            self.assertEqual(install._hook_command(), "false")   # the v1 dev hook keeps its own fail mode
+            p = subprocess.run(install._hook_command(), shell=True, capture_output=True, text=True, timeout=30,
+                               env={k: v for k, v in os.environ.items() if k != "TRACEKIT_FAIL_CLOSED"})
+            self.assertEqual(p.returncode, 1, p.stderr)   # the v1 dev hook keeps its own fail mode (open by default)
 
     def test_v2_without_the_policy_engine_is_refused(self):
         from tracekit.policy2 import engine

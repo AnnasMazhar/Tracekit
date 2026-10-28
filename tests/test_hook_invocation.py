@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -127,6 +128,24 @@ class FailMode(unittest.TestCase):
             self.assertEqual(self.cursor_fail_closed(), {"preToolUse"})
         with mock.patch.object(client, "system_fail_closed", return_value=False):
             self.assertEqual(self.cursor_fail_closed(), set())
+
+    @unittest.skipIf(os.name == "nt", "the fail-closed wrapper is POSIX shell")
+    def test_a_v1_dev_hook_that_cannot_run_follows_tracekit_fail_closed(self):
+        """A v1 dev pre-tool hook that can't start (tracekit gone: exit 1; its Python gone: 127) can't read the fail
+        mode, so its command does: TRACEKIT_FAIL_CLOSED=1 blocks the call, else it runs with an error shown."""
+        gone = shlex.quote(os.path.join(self.d, "gone", "python"))
+        for module, args in (("tracekit.hook", ()), ("tracekit.agent_hooks", ("codex",))):
+            for run, open_, closed in (("false", 1, 2), (gone, 1, 2), ("sh -c 'exit 2'", 2, 2), ("true", 0, 0)):
+                with mock.patch.object(install, "_dev_hook_command", return_value=run):
+                    cmd = install._hook_command(module, "entry", args)
+                    self.assertEqual(install._hook_command(module, "entry", args, pre=False), run)   # never blocks
+                for env, want in (({}, open_), ({"TRACEKIT_FAIL_CLOSED": "0"}, open_), ({"TRACEKIT_FAIL_CLOSED": "1"}, closed)):
+                    p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30,
+                                       env=dict(os.environ, **env))
+                    self.assertEqual(p.returncode, want, (module, run, env, p.stderr))
+                    if run in ("false", gone):
+                        self.assertIn("call blocked (fail-closed)" if want == 2 else "set TRACEKIT_FAIL_CLOSED=1",
+                                      p.stderr)
 
     def test_wiring_error_blocks_when_fail_closed(self):
         with mock.patch.object(client, "system_fail_closed", return_value=True), mock.patch("sys.stderr", io.StringIO()):
