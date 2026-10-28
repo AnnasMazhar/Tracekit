@@ -368,9 +368,11 @@ class Surfaces(unittest.TestCase):
                     self.assertEqual(exchange(port, wire(request, lines, b"{}")), ([400], True))
 
     def test_a_header_hidden_in_a_folded_line_or_after_a_bare_cr_is_refused(self):
-        """Python's parser reads an obs-fold line as part of the header before it, and ends the headers at a bare CR
-        (the rest is left as a payload), with no defect either way: a Content-Length hidden so would go unread."""
-        for shape in (["X-A: b", " Content-Length: 2"], ["X-A: b\r", "Content-Length: 2"]):
+        """Python's parser reads an obs-fold line as part of the header before it, and takes a bare CR as a line end
+        (ending the headers, or starting a header mid-line), with no defect: a proxy in front that reads the line
+        otherwise frames the body otherwise."""
+        for shape in (["X-A: b", " Content-Length: 2"], ["X-A: b\r", "Content-Length: 2"],
+                      ["X-A: b\rContent-Length: 2"]):
             for name, port, reads, _ in self.kept_alive():
                 for request in reads:
                     with self.subTest(shape=shape, server=name, request=request):

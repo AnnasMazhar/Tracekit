@@ -50,6 +50,10 @@ def self_signed(d):
 
 
 class RefusedBody(unittest.TestCase):
+    def test_a_message_content_type_is_framed_by_its_content_length(self):
+        headers = http.client.parse_headers(io.BytesIO(b"Content-Type: message/rfc822\r\nContent-Length: 2\r\n\r\n"))
+        self.assertEqual(netserver.body_length(headers), (2, None))
+
     def test_a_refused_post_with_an_unread_body_still_gets_its_answer(self):
         """A handler that answers without reading the body (an auth failure) must not reset the connection under the
         client before it reads the answer (Windows resets it always; others when the body is still arriving)."""

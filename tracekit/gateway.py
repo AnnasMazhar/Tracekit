@@ -72,7 +72,7 @@ from tracekit import parsers, yamlmini
 from tracekit.client import remote_url_error
 from tracekit.format.canon import canonical, loads_strict
 from tracekit.identity.base import bearer
-from tracekit.netserver import body_length, read_body
+from tracekit.netserver import Lines, body_length, read_body
 from tracekit.proxy import HOP, MAX_SSE_LINE
 from tracekit.sdk.client import Client, SignerUnavailable, VaultBody, fail_open
 from tracekit.signer.quotas import MAX_LINE
@@ -307,7 +307,7 @@ class _SSE:
             self.done = self.done or ev.get("type") in TERMINAL
 
 
-class _Handler(http.server.BaseHTTPRequestHandler):
+class _Handler(Lines, http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     NAME = "tracekit gateway"   # in every error the client gets
 

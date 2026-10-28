@@ -48,7 +48,7 @@ import threading
 from http.server import BaseHTTPRequestHandler
 
 from . import client, policy, privacy
-from .netserver import MAX_THREADS, Server, body_length, read_body
+from .netserver import MAX_THREADS, Lines, Server, body_length, read_body
 from .observe import LOOPBACK_HOSTS, _host_only
 from .usage import from_otel
 from .core import GENESIS, SCHEMA_VERSION, jsonable, now_ts
@@ -514,7 +514,7 @@ def handle_traces(receiver, body, content_type, content_encoding):
 
 
 def make_handler(receiver):
-    class H(BaseHTTPRequestHandler):
+    class H(Lines, BaseHTTPRequestHandler):
         server_version = "tracekit-otlp"
         protocol_version = "HTTP/1.1"
 

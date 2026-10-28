@@ -32,7 +32,7 @@ import zlib
 
 from . import client, netserver, privacy
 from .core import content_ref, new_id, now_ts
-from .netserver import body_length, read_body
+from .netserver import Lines, body_length, read_body
 from .observe import LOOPBACK_HOSTS, _host_only
 
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding",
@@ -195,7 +195,7 @@ def record(ev, fail_closed):
         return False
 
 
-class Handler(http.server.BaseHTTPRequestHandler):
+class Handler(Lines, http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "tracekit-proxy"
 

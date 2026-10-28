@@ -15,6 +15,7 @@ import ssl
 import sys
 import threading
 import time
+from email import errors
 from http.server import ThreadingHTTPServer
 
 TIMEOUT_S = 10.0
@@ -51,10 +52,10 @@ def body_length(headers, digits=12):
     """(n, None): the request's body is the n bytes its one Content-Length says (n None: it declares none). (None, why):
     its framing is refused, with the connection closed. Every server here reads a body by Content-Length only; a proxy
     in front that frames it otherwise (by Transfer-Encoding, by another Content-Length, by a header line Python's parser
-    dropped together with every one after it, folded into the one before it or left after a bare CR as a payload)
+    dropped together with every one after it, folded into the one before it, or split at a bare CR: Lines)
     would forward the bytes past it as another request. A value is ASCII digits only: int() also takes `+1`, `1_0`
     and other scripts' digits, and raises past 4,300 of them."""
-    if headers.defects or headers.get_payload() or any("\r" in v or "\n" in v for v in headers.values()):
+    if headers.defects or any("\r" in v or "\n" in v for v in headers.values()):
         return None, "a malformed header line"
     if "transfer-encoding" in headers:
         return None, "Transfer-Encoding isn't supported: send the body with Content-Length"
@@ -64,6 +65,28 @@ def body_length(headers, digits=12):
     if n and not (n[0].isascii() and n[0].isdigit() and len(n[0]) <= digits):
         return None, f"Content-Length: at most {digits} ASCII digits"
     return (int(n[0]) if n else None), None
+
+
+class Lines:
+    """A mixin, before BaseHTTPRequestHandler, whose headers carry, as a defect body_length refuses, a CR that doesn't
+    end its line: Python's parser takes it as a line end (`X-A: b\rContent-Length: 2` is two headers, `X-A: b\r\r\n`
+    ends them), where a proxy in front may not, and the parsed headers keep no trace of it."""
+
+    def parse_request(self):
+        rfile, lines = self.rfile, [self.raw_requestline]
+
+        class Kept:   # each line the header parser reads, as it came
+            def readline(_, limit=-1):
+                lines.append(rfile.readline(limit))
+                return lines[-1]
+        self.rfile = Kept()
+        try:
+            ok = super().parse_request()
+        finally:
+            self.rfile = rfile
+        if ok and any(b"\r" in line.removesuffix(b"\n").removesuffix(b"\r") for line in lines):
+            self.headers.defects.append(errors.InvalidHeaderDefect("a CR that doesn't end its line"))
+        return ok
 
 
 def read_body(handler, n):
