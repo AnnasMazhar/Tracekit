@@ -117,8 +117,8 @@ transcript's start: the hook notes how far the transcript was written while that
 ([limits](limits.md#signer-and-capture)).
 
 At each prompt (`UserPromptSubmit`; Cursor's `beforeSubmitPrompt`, Gemini CLI's `BeforeAgent`) the hook also records
-what the person typed (`input.observed`, trusted, source `<agent>:UserPromptSubmit`: `claude-code`, `codex`, `cursor` or
-`gemini-cli`; its text in the content vault). Text the harness added to the prompt is recorded apart, as untrusted
+what the person typed (`input.observed`, trusted, source `<agent>:UserPromptSubmit`: `claude-code`, `codex`, `cursor`,
+`gemini-cli`, `qwen-code` or `droid`; its text in the content vault). Text the harness added to the prompt is recorded apart, as untrusted
 input under its own source, so a value in it keeps its provenance: in Claude Code a paste block, a skill's body, a
 message from another session, agent or teammate, a task or system notification, a scheduled task, uploads and command
 output (`claude-code:paste`, `claude-code:task-notification`, ...); in Gemini CLI its referenced files block
@@ -139,7 +139,9 @@ approval, and the agent reads why on stderr:
 
 Answer it from another terminal with the command the line names (`tracekit approvals list` shows every held call); the
 agent's own `approve` or `reject` is denied (`TK-D012`). When the hook's signer is a named one (system mode,
-`tracekit init --remote --v2` or `TRACEKIT_SIGNER`), the command includes `--signer ADDR`. On your default signer,
+`tracekit init --remote --v2` or `TRACEKIT_SIGNER`), the command includes `--signer ADDR`. In system mode, run it from
+the approver's account as `/opt/tracekit/bin/python -I -m tracekit approvals …` (init puts no `tracekit` command on the
+PATH). On your default signer,
 `tracekit approve apr-…` and `tracekit reject apr-…` work too. `tracekit view --dev` lists
 the run's constraints at the top of its review. The grammar reads instructions, not descriptions: "add a read-only mode
 to client.py", "don't change the public API of client.py, just fix the timeout bug in it", "don't push to main" and
@@ -159,8 +161,8 @@ an allowed call whose post-tool payload was lost is completed as an error at the
 
 Hooks installed before 1.2 have no event argument and keep working as before: an unparseable payload passes,
 unrecorded. `tracekit doctor` warns `D-HOOKS-EVENT` for Claude Code, Codex, Cursor, Gemini CLI, goose, Qwen Code,
-Factory Droid and Antigravity CLI when a command doesn't name its configured event or, on any event but a tool call,
-blocks that event when the hook can't run (a command init wrote before 1.3, or a Cursor hook written up to 1.4.2), and
+Factory Droid and Antigravity CLI when a command doesn't name its configured event or, on any event but the pre-tool
+one, blocks that event when the hook can't run (a command init wrote before 1.3, or a Cursor hook written up to 1.4.2), and
 `D-HOOKS-TIMEOUT` when a pre-tool timeout is shorter than the 540 s approval
 wait (milliseconds for Gemini CLI and Qwen Code). Re-run init for the active mode to repair the other coding agents' hooks
 (`tracekit init --dev --v2 --agent NAME` in dev, or `sudo tracekit init --v2 --user AGENT --agent NAME` in system
