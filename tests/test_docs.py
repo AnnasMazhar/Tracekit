@@ -142,9 +142,10 @@ class DocCommands(unittest.TestCase):
     def test_no_system_mode_command_needs_tracekit_on_roots_path(self):
         """System-mode init installs Tracekit only into /opt/tracekit (install._install_venv) and puts no `tracekit`
         command on root's PATH, so `sudo tracekit ...` finds none there. `tracekit deploy compose` isn't system mode."""
-        pages = [os.path.join(ROOT, "README.md")] + [p for pattern in ("docs/**/*.md", "plugin/**/*.md",
-                                                                       "tracekit/**/*.py", "tracekit/**/*.yaml")
-                                                     for p in glob.glob(os.path.join(ROOT, pattern), recursive=True)]
+        pages = [os.path.join(ROOT, "README.md"), os.path.join(ROOT, "tracekit_sdk.py")] + [
+            p for pattern in ("docs/**/*.md", "plugin/**/*.md", "tracekit/**/*.py", "tracekit/**/*.yaml", "eval/*.py",
+                              "eval/*.yaml")
+            for p in glob.glob(os.path.join(ROOT, pattern), recursive=True)]
         hits = [f"{os.path.relpath(p, ROOT)}:{n}" for p in pages for n, line in enumerate(read(p).splitlines(), 1)
                 if re.search(r"sudo tracekit (?!deploy )", line)]
         self.assertEqual(hits, [])
