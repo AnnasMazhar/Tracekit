@@ -106,8 +106,8 @@ deny:
     # ~/.local/share; a home is ~, $HOME or an absolute /home/<u>, /Users/<u> or /root, so a project's .claude, or a
     # repo's build/home/u/.claude, isn't one). MAY_WRITE: any word, herestring or heredoc on a line whose writer gets
     # its files at run time (xargs rm, rm "$f") or in code it runs (docker exec c sh -c, perl -e, osascript, at from a
-    # pipe), or whose commands the parser can't read (| sh, fish -c). Anchored and lazy, so the fallback engine stays
-    # linear
+    # pipe), or whose commands the parser can't read (| sh, fish -c) with a writer's name or > in it. Anchored and
+    # lazy, so the fallback engine stays linear
     pattern: '^(?:WRITE_TARGET|DELETE_TARGET|MAY_WRITE):[\w\W]*?(?:\.claude[/\\]projects|\.codex[/\\]sessions|\.gemini[/\\]tmp|(?:\.local[/\\]share|XDG_DATA_HOME\}?)[/\\]opencode[/\\](?:storage(?:[/\\]|$)|opencode[^/\\]*\.db))|^DELETE_TARGET:(?:(?:~|\$\{?HOME\}?|(?:[a-z]:)?[/\\]+(?:private[/\\]+)?(?:var[/\\]+)?(?:(?:home|users)[/\\]+[^/\\]+|root))[/\\]+(?:\.claude|\.codex|\.gemini|\.local(?:[/\\]share(?:[/\\]opencode)?)?)|\$\{?XDG_DATA_HOME\}?(?:[/\\]opencode)?)[/\\]*\*?$'
     reason: modifying the agent harness's transcripts
     remedy: Leave the harness's transcripts as they are (reading them is fine); a person removes them once the run's evidence is exported.

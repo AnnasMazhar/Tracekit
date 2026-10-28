@@ -436,15 +436,18 @@ def _effects(parsed):
     sed -i and perl -i name, find with -delete, -exec rm or an -exec that writes each file found (sed -i), awk's
     print > "file", zip -m's sources, and one of those that git, docker, podman, kubectl or parallel runs from its words
     (git rm). When a command writes files the line names only at run time or inside code it runs (_opaque), or the
-    parser can't read what one runs (its `opaque`: `| sh`, `fish -c`, a name an expansion builds), every word on the
-    line and each herestring and heredoc text is one it may write, as MAY_WRITE:word (only TK-D008 reads those); for
-    one the parser can't read, each normalised line too (a name an expansion builds may hold the path)."""
+    parser can't read what one runs (its `opaque`: `| sh`, `fish -c`, a name an expansion builds) and a writer's name
+    or `>` is in its normalised lines or its herestring or heredoc text, every word on the line and each herestring and
+    heredoc text is one it may write, as MAY_WRITE:word (only TK-D008 reads those); for one the parser can't read, each
+    normalised line too (a name an expansion builds may hold the path)."""
     tags = ["WRITE_TARGET:" + _text(ref) for ref in parsed[3]] + _command_effects(parsed[0])
-    if any(c["opaque"] or _opaque(c) for c in parsed[0]):
+    unread = any(c["opaque"] for c in parsed[0])
+    if any(_opaque(c) for c in parsed[0]) or unread and any(
+            _WRITE_WORD.search(t.lower()) for t in parsed[1] + [s for c in parsed[0] for s in c["stdin"]]):
         # lean: a read on the same line as such a writer counts as a write (as TK-D008 read the whole line before
         # #421); follow the names into the writer if that holds real reads
         tags += ["MAY_WRITE:" + w for c in parsed[0] for w in c["argv"][1:] + c["stdin"]]
-        tags += ["MAY_WRITE:" + line for line in parsed[1] if any(c["opaque"] for c in parsed[0])]
+        tags += ["MAY_WRITE:" + line for line in parsed[1] if unread]
     return list(dict.fromkeys(tags + [k + ":" + path.casefold() for k, _, path in (t.partition(":") for t in tags)]))
 
 

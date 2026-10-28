@@ -665,7 +665,8 @@ class CodingPack(unittest.TestCase):
         shell script runs, that zip -m makes of its sources, or that a line the parser can't read runs (a pipe into
         sh, fish -c, a name built from $IFS): each was only flagged or asked. The parser reads trap's action and at's or
         batch's herestring or heredoc as code; xargs's stdin text, at or batch from a pipe and osascript count as
-        writes of every word on the line, and an unreadable line's normalised lines too."""
+        writes of every word on the line, and so does a line the parser can't read with a writer's name
+        in it, with its normalised lines too; a read there stays held for a person."""
         t = "~/.claude/projects"
         deletes = ("xargs rm -rf <<< " + t, "xargs -0 rm -rf <<< " + t, "xargs -I{} rm -rf {} <<< " + t,
                    "xargs rm -rf <<EOF\n" + t + "\nEOF", "trap 'rm -rf " + t + "' EXIT",
@@ -677,10 +678,11 @@ class CodingPack(unittest.TestCase):
                    "zip -rm /tmp/x.zip " + t, "zip -mr /tmp/x.zip " + t, "zip -r -m /tmp/x.zip " + t,
                    "zip --move -r /tmp/x.zip " + t, "ls " + t + "/* | zip -m@ /tmp/x.zip",
                    "echo 'rm -rf " + t + "' | sh", "cat <<'EOF' | sh\nrm -rf " + t + "\nEOF", "fish -c 'rm -rf " + t + "'",
-                   "rm${IFS}-rf${IFS}" + t)
+                   "rm${IFS}-rf${IFS}" + t, "RM${IFS}-rf${IFS}" + t)
         kept = ("trap 'rm -rf \"$tmp\"' EXIT", "trap cleanup EXIT", "trap - EXIT", "zip -r out.zip " + t,
                 "zip -rm out.zip build", "at now <<< 'ls " + t + "'", "xargs -n1 echo <<< " + t,
-                "osascript -e 'display notification \"done\"'", "cat " + t + "/p/a.jsonl | xargs echo")
+                "osascript -e 'display notification \"done\"'", "cat " + t + "/p/a.jsonl | xargs echo",
+                "echo 'ls " + t + "' | sh", "fish -c 'ls " + t + "'", "$PAGER " + t + "/p/a.jsonl")
         for pack, engine, e in self.every_pack():
             for command in deletes:
                 with self.subTest(pack=pack, engine=engine, command=command):
