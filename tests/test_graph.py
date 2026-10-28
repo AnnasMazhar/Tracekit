@@ -296,6 +296,31 @@ class QueryInput(unittest.TestCase):
             self.assertIn("names several nodes: call:r1:t1[1A[2K, call:r1:t2[1A[2K", err.getvalue())
             self.assertEqual(_CONTROL.findall(err.getvalue().replace("\n", "")), [])
 
+    def test_a_malformed_graph_is_refused_with_a_message_never_a_traceback(self):
+        """graph.json is unsigned: a hand-written one can hold any JSON where query reads objects, lists and strings."""
+        run_node, file_node = ({"id": "run:r1", "kind": "run", "label": "r1", "ts": TS},
+                               {"id": "file:x", "kind": "file", "label": "x"})
+
+        def edge(**over):
+            return {"src": "run:r1", "dst": "file:x", "kind": "file event (s)", "grade": "OBSERVED",
+                    "record": {"run_id": "r1", "run_seq": 1, "seq": 9, "ts": TS}, **over}
+        for name, nodes, edges in (
+                ("nodes not a list", {"file:x": file_node}, []),
+                ("a node without an id", [{"kind": "file", "label": "x"}], []),
+                ("a label not a string", [dict(file_node, label=["x"])], []),
+                ("edges with non-string ends", [run_node, file_node], [edge(src=["run:r1"])]),
+                ("a record not an object", [run_node, file_node], [edge(record=["r1"])]),
+                ("an edge citing a run with no node", [file_node, {"id": "agent:a", "kind": "agent", "label": "a"}],
+                 [edge(src="agent:a")]),
+                ("an UNVERIFIED edge with no claimed grade", [run_node, file_node], [edge(grade="UNVERIFIED")])):
+            with self.subTest(name), tempfile.TemporaryDirectory() as d:
+                with open(os.path.join(d, graph.GRAPH), "w") as f:
+                    json.dump({"schema_version": 1, "sources": [], "nodes": nodes, "edges": edges}, f)
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+                    self.assertEqual(graph.main(["query", d, "--file", "x"]), 2)
+                self.assertRegex(err.getvalue(), r"^tracekit graph: (not a Tracekit graph|.*graph\.json: "
+                                                 r"(nodes|edges)\[0\] is not a)")
+
 
 class ReviewRegressions(unittest.TestCase):
     def doc(self, g):
@@ -492,6 +517,38 @@ class ReviewRegressions(unittest.TestCase):
         # the vault finds a run by its id alone: a shared id's runs are not read from it, and the report says so
         self.assertEqual(sorted(read), ["fr", "solo"])
         self.assertIn(f"run {globex}: not read from the vault", graph.report(doc))
+
+    def test_a_failed_bundle_claiming_another_tenant_renames_no_verified_run(self):
+        """A forged bundle names a verified run's id under another tenant: the verified run keeps its id and its vault
+        read, and the forgery's edges join it, UNVERIFIED."""
+        def run_of(tenant, agent):
+            recs = [rec(0, "run.registered", {"agent": {"name": agent}}, "job-42"),
+                    rec(1, "policy.decision", {"tool_use_id": "t1", "decision_id": "d1", "tool": "Write",
+                                               "decision": "allow"}, "job-42")]
+            for r in recs:
+                r["event"]["tenant"] = tenant
+            return {"job-42": recs}
+
+        table = {"acme.tkb": (True, run_of("acme", "acme-payroll-bot")),
+                 "forged.tkb": (False, run_of("globex", "globex-agent"))}
+
+        def read_source(path, *a):
+            name = os.path.basename(path)
+            ok, runs = table[name]
+            return {"name": name, "sha256": name, "verify": {"ok": ok, "integrity": "ok" if ok else "FAILED",
+                                                             "failures": [] if ok else ["signature"]}}, runs
+        read = []
+        with tempfile.TemporaryDirectory() as d:
+            trust = os.path.join(d, "trust.json")
+            with open(trust, "w") as f:
+                f.write("{}")
+            with mock.patch.object(graph, "_read", side_effect=read_source), mock.patch.object(graph, "_add_why"):
+                doc = graph.build([os.path.join(d, n) for n in table], trust, lambda rid, recs: read.append(rid) or {})
+        self.assertEqual([n["id"] for n in doc["nodes"] if n["kind"] == "run"], ["run:job-42"])
+        self.assertEqual(read, ["job-42"])
+        self.assertNotIn("not read from the vault", graph.report(doc))
+        self.assertEqual({(e["src"], e["grade"]) for e in doc["edges"] if e["kind"] == "ran"},
+                         {("agent:acme-payroll-bot", "SIGNED"), ("agent:globex-agent", "UNVERIFIED")})
 
     def test_unverified_people_and_agents_do_not_describe_signed_answers(self):
         g = Graph(None, "grade")
@@ -705,6 +762,39 @@ class ReviewRegressions(unittest.TestCase):
                 os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
                 self.fail("build blocked on a FIFO as its Graphify input")
         self.assertEqual(got, [f"{fifo}: source is not a regular file; pass --graphify '' to build without it"])
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires FIFOs")
+    def test_query_and_verify_refuse_a_fifo_as_graph_json_without_blocking(self):
+        with tempfile.TemporaryDirectory() as d:
+            fifo = os.path.join(d, graph.GRAPH)
+            os.mkfifo(fifo)   # planted by anyone who can write DIR
+            for argv in (["query", d, "--file", "x"], ["verify", d, "--trust", os.path.join(d, "trust.json")]):
+                got = []
+
+                def main():
+                    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+                        got.append((graph.main(argv), err.getvalue()))
+                with self.subTest(argv[0]), mock.patch("tracekit.verify.v2.load_trust"):
+                    t = threading.Thread(target=main, daemon=True)
+                    t.start()
+                    t.join(5)
+                    if t.is_alive():   # blocked opening it: a writer releases it
+                        os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+                        t.join(5)
+                        self.fail(f"{argv[0]} blocked on a FIFO as graph.json")
+                    self.assertEqual(got, [(2, f"tracekit graph: {fifo}: source is not a regular file\n")])
+
+    def test_verify_prints_no_control_character_of_a_recorded_source_name(self):
+        """graph.json is anyone's who can write DIR: a source name it lists must not draw verify's success line."""
+        with tempfile.TemporaryDirectory() as d:
+            said = f"{d}: {graph._and(graph.FILES)} are what their sources give"
+            with open(os.path.join(d, graph.GRAPH), "w") as f:
+                json.dump({"schema_version": 1, "nodes": [], "edges": [],
+                           "sources": [{"name": f"x.tkb\r{said}\x1b[K\n", "sha256": "0" * 64}]}, f)
+            with mock.patch("tracekit.verify.v2.load_trust"):
+                code, out = run("verify", d, "--trust", os.path.join(d, "trust.json"))
+        self.assertEqual((code, out), (1, f"x.tkb{said}[K: source is missing; pass it to tracekit graph verify\n"))
+        self.assertEqual(_CONTROL.findall(out[:-1]), [])
 
 
 @unittest.skipUnless(os.name == "posix", "the Claude Code hook runs through a POSIX shell")

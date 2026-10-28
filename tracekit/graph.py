@@ -613,9 +613,11 @@ def build(paths: List[str], trust: str, content: Optional[Content] = None,
     source_data = _source_data or {}
     read = sorted((_read(p, trust, source_data[p]) if p in source_data else _read(p, trust) for p in paths),
                   key=lambda s: (not s[0]["verify"]["ok"], s[0]["sha256"], s[0]["name"]))
-    owners: Dict[str, set] = {}   # run id -> the (tenant, log id)s it names a run in: it is unique only within one
-    for _, rs in read:
-        for recs in rs.values():
+    # run id -> the (tenant, log id)s verified runs name it in, as it is unique only within one: a failed bundle's
+    # claimed tenant renames no verified run (and stops no vault read); its runs of that id join it, UNVERIFIED
+    owners: Dict[str, set] = {}
+    for src, rs in read:
+        for recs in rs.values() if src["verify"]["ok"] else ():
             for rid in _named_runs(recs):
                 owners.setdefault(rid, set()).add((recs[0]["event"].get("tenant"), recs[0]["event"].get("log_id")))
     shared = {rid for rid, o in owners.items() if len(o) > 1}
@@ -686,6 +688,46 @@ def _is_tracekit_graph(doc: Any) -> bool:
 def _named(entry: Any) -> bool:
     """Whether a sources or graphify entry of graph.json has the name and digest verify reads."""
     return isinstance(entry, dict) and isinstance(entry.get("name"), str) and isinstance(entry.get("sha256"), str)
+
+
+def _malformed(doc: Dict[str, Any]) -> Optional[str]:
+    """The first node or edge of graph.json `doc` not of the shape query reads (build writes no other), or None."""
+    ids = set()
+    for i, n in enumerate(doc["nodes"]):
+        if not (isinstance(n, dict) and all(isinstance(n.get(k), str) for k in ("id", "kind", "label"))
+                and n["id"].startswith(n["kind"] + ":") and isinstance(n.get("ts", ""), str)
+                and (n["kind"] != "code" or isinstance(n.get("source_file"), str)
+                     and isinstance(n.get("source_location") or "", str))):
+            return f"nodes[{i}] is not a node (string id KIND:..., kind and label)"
+        ids.add(n["id"])
+    for i, e in enumerate(doc["edges"]):
+        r = e.get("record") if isinstance(e, dict) else None
+        if not (isinstance(e, dict) and all(isinstance(e.get(k), str) for k in ("src", "dst", "kind"))
+                and e.get("grade") in GRADES and (e["grade"] != "UNVERIFIED" or e.get("claimed") in GRADES)
+                and isinstance(r, dict) and ("run_id" not in r or isinstance(r["run_id"], str)
+                                             and "run:" + r["run_id"] in ids and isinstance(r.get("ts"), str)
+                                             and all(isinstance(r.get(k), int) for k in ("run_seq", "seq")))
+                and (not isinstance(e.get("effect"), (int, float)) or -1 <= e["effect"] <= 1)   # p_with - p_without
+                and not {"evidence", "self"} & e.keys()):   # _graph passes its other fields to Graph.add_edge
+            return f"edges[{i}] is not an edge (string src, dst and kind, a grade, a record of a run in the graph)"
+    return None
+
+
+def _load(out: str) -> Dict[str, Any]:
+    """DIR `out`'s graph.json, read as verify reads a source (a FIFO planted there blocks nothing), refused unless it
+    is a Tracekit graph of the shape query reads: it is unsigned, so a hand-written one can hold anything."""
+    path = os.path.join(out, GRAPH)
+    try:
+        data = _secure_source(path)
+    except ValueError as e:   # more than MAX_SOURCE_BYTES
+        raise ValueError(f"{e}; build graphs of fewer bundles each") from e
+    doc = json.loads(data)
+    if not _is_tracekit_graph(doc):
+        raise ValueError("not a Tracekit graph (Graphify's graph.json is joined with --graphify, not queried)")
+    bad = _malformed(doc)
+    if bad:
+        raise ValueError(f"{path}: {bad}; build it again with tracekit graph build")
+    return doc
 
 
 def _run_of(e: Dict[str, Any]) -> Optional[str]:
@@ -1194,10 +1236,7 @@ def verify(out: str, trust: str, content: Optional[Content] = None, paths: Optio
            graphify: Optional[str] = None) -> List[str]:
     """What differs between DIR's files and the ones its sources give now ([] when nothing does). `content`: the vault
     reader, used when graph.json was built with call arguments from it."""
-    with open(os.path.join(out, GRAPH), encoding="utf-8") as f:
-        have = json.load(f)
-    if not _is_tracekit_graph(have):
-        raise ValueError("not a Tracekit graph (Graphify's graph.json is joined with --graphify, not queried)")
+    have = _load(out)
     listed = have["sources"]
     default_paths = paths is None
     source_dir = os.path.dirname(os.path.abspath(out))
@@ -1251,9 +1290,8 @@ def verify(out: str, trust: str, content: Optional[Content] = None, paths: Optio
         problems.append("the trust config is not the one graph.json was built with")
     for name, text in _files(doc).items():
         try:
-            with open(os.path.join(out, name), encoding="utf-8", newline="") as f:
-                same = f.read() == text
-        except OSError:
+            same = _secure_source(os.path.join(out, name)) == text.encode("utf-8")
+        except (OSError, ValueError):
             same = False
         if not same:
             problems.append(f"{name} is not what its sources give")
@@ -1308,16 +1346,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
         if a.cmd == "verify":
             problems = verify(a.dir, a.trust, vault(), a.sources or None, a.graphify)
-            print("\n".join(problems) or f"{a.dir}: {_and(FILES)} are what their sources give")
+            # they name graph.json's sources, as anyone who can write DIR wrote them: none may redraw the success line
+            print("\n".join(v2._CONTROL.sub("", line) for line in problems)
+                  or f"{a.dir}: {_and(FILES)} are what their sources give")
             return 1 if problems else 0
-        with open(os.path.join(a.dir, GRAPH), encoding="utf-8") as f:
-            doc = json.load(f)
-    except (OSError, ValueError, SignerUnavailable, RPCError) as e:
+        doc = _load(a.dir)
+    except (OSError, ValueError, RecursionError, SignerUnavailable, RPCError) as e:   # RecursionError: nested too deep
         print(f"tracekit graph: {e}", file=sys.stderr)
-        return 2
-    if not _is_tracekit_graph(doc):
-        print("tracekit graph: not a Tracekit graph (Graphify's graph.json is joined with --graphify, not queried)",
-              file=sys.stderr)
         return 2
     nodes = {n["id"]: n for n in doc["nodes"]}
     try:

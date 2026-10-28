@@ -37,7 +37,7 @@ The bundle holds a commitment to those arguments, not the arguments themselves. 
 make file and host edges from call arguments; it can still include signed provenance edges and observer edges. The
 build output and report state how many call arguments were not read. Each vault read opens the record's commitment and
 is recorded by the signer as `content.accessed`. The vault finds a run by its id in the builder's own tenant, so a run
-whose id other tenants' or logs' runs in the graph share is not read; the report says so.
+whose id verified runs of other tenants or logs in the graph share is not read; the report says so.
 
 A `wrote` or `reached` edge needs a successful T2 executor or gateway result for that decision. A successful result
 from another tier produces `reported writing` or `reported reaching`. With decided arguments but no successful result,
@@ -78,10 +78,12 @@ verifier joins them. A decision made again under the same tool call id and attem
 (read with `--content`) is the same call as the first: LangGraph decides again when it resumes after an approval, and
 the signer's one approval of a call attempt covers both. Without `--content` each decision is a call of its own.
 
-A run id is unique only within one tenant of one signer log. When runs of other tenants or logs in the graph have the
-same id, each of those runs is `RUN_ID@TENANT@LOG_ID` instead of `RUN_ID`, in node ids, labels and edge records, and
-wherever a record of its tenant and log names it (a findings run's `analyzes`, a replay run's `replay_of`, a why test's
-replay runs), so a why test about it is counted with its own tenant's runs.
+A run id is unique only within one tenant of one signer log. When verified runs of other tenants or logs in the graph
+have the same id, each of those runs is `RUN_ID@TENANT@LOG_ID` instead of `RUN_ID`, in node ids, labels and edge
+records, and wherever a record of its tenant and log names it (a findings run's `analyzes`, a replay run's
+`replay_of`, a why test's replay runs), so a why test about it is counted with its own tenant's runs. A bundle that
+fails verification renames no run: its tenant and log are claims, so its run of a verified run's id joins that run,
+`UNVERIFIED`, as a tampered copy does.
 
 ### Edges and grades
 
@@ -153,7 +155,9 @@ Node filters return `{matched, code, runs, map}`. `--blast` returns `{from, reac
 `who`, `run`, `call`, `thing`, and `after`.
 
 A node filter with no match, or a path that is not found, exits 1. A bad graph or an unknown or ambiguous node exits
-2. A blast with no downstream node is still a successful query.
+2. A blast with no downstream node is still a successful query. `query` and `verify` read `graph.json` as verify
+reads a source (a regular file of at most 512 MiB, not a symlink, a FIFO, or a device), and refuse one whose nodes and
+edges are not of the shape build writes (`nodes[3] is not a node ...`).
 
 `graph.json` is not signed, and `query` answers from it as it finds it, so anyone who can write `DIR` can write the
 answers. The first line of the text output (stderr with `--json`) says so and gives the command that checks it:
@@ -203,8 +207,9 @@ tracekit-graph: graph.json, GRAPH_REPORT.json and GRAPH_REPORT.md are what their
 ```
 
 Verification exits 0 for that result. It exits 1 and prints each problem when a source is missing or differs, or when
-a source digest, Graphify input, trust configuration, or output file differs. An invalid graph, invalid trust
-configuration, or unavailable signer is an error and exits 2.
+a source digest, Graphify input, trust configuration, or output file differs. The problems drop control and
+bidirectional format characters from the source names `graph.json` lists, so a planted name can't draw the success
+line. An invalid graph, invalid trust configuration, or unavailable signer is an error and exits 2.
 
 ## `graph.json`
 
