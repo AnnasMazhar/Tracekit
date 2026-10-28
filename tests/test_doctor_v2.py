@@ -530,6 +530,15 @@ class Reinit(unittest.TestCase):
         """On macOS init refuses system mode without --experimental-macos, which the fix left out."""
         self.assertEqual(doctor.REINIT.endswith(" --experimental-macos"), sys.platform == "darwin")
 
+    def test_the_reinit_fix_is_the_init_docs_deploy_gives_for_the_python(self):
+        """The fix ran init with /usr/bin/python3 -m tracekit: on a Python 3.11+ that refuses pip (PEP 668), Tracekit is
+        only in /opt's venv, and that found no module named tracekit."""
+        self.assertTrue(doctor.reinit((3, 11)).startswith("sudo /opt/tracekit/bin/python -I -m tracekit init --v2 "))
+        self.assertTrue(doctor.reinit((3, 13)).startswith("sudo /opt/tracekit/bin/python -I -m tracekit init --v2 "))
+        for old in ((3, 9), (3, 10)):   # init from /opt's venv breaks it there: the system Python's, as deploy.md says
+            self.assertTrue(doctor.reinit(old).startswith("sudo /usr/bin/python3 -I -m tracekit init --v2 "))
+        self.assertEqual(doctor.REINIT, doctor.reinit(sys.version_info[:2]))
+
 
 class K8s(unittest.TestCase):
     def test_clean_deployment_passes_every_check(self):
