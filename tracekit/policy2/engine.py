@@ -214,10 +214,18 @@ class Engine:
         whole call (Write/Edit content, WebFetch url and prompt, MCP args). A shell `line` is the raw command and
         each line the parser normalised, a shell `code` those without the text a command only writes into a file
         (shell.analyse); an fs `path` with `..` also matches its lexically normalised form, and each entry of a
-        `paths` list (every file of a Codex patch) is a path too. `target` (every class) is what the call
+        `paths` list (every file of a Codex patch) is a path too, and an http field is read for each URL of a `urls`
+        list too (every URL a Gemini CLI web_fetch prompt names). `target` (every class) is what the call
         acts on rather than what it carries (Engine._targets); shell `effects` the files it writes or deletes
         (_effects); sql `code` is one subject per dialect reading. With
         `split`, a list value is one subject per element (nested lists flattened)."""
+        if cls == "http" and field is not None and isinstance(args.get("urls"), list):   # a call on several URLs
+            urls = canonical(args["urls"])
+            if len(_text(urls).encode()) > MAX_SUBJECT:   # unread, as a long subject is: TK-OVERSIZE in its rule's section
+                return [urls]
+            one = {k: v for k, v in args.items() if k != "urls"}
+            return list(dict.fromkeys(s for a in [one] + [{**one, "url": u} for u in args["urls"]] for s in
+                                      Engine._subjects(cls, field, a, classes.extract(cls, "", a), parsed, split)))
         if field == "target":
             return Engine._targets(cls, args, fields, parsed)
         if cls == "shell" and field == "effects":

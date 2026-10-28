@@ -383,6 +383,23 @@ class Engines(unittest.TestCase):
             e.decide("Bash", {"command": "grep x " + "a " * 2000})
         self.assertEqual(words.call_count, 1)
 
+    def test_an_http_call_on_several_urls_is_decided_on_each(self):
+        """A `urls` list (every URL a Gemini CLI web_fetch prompt names) is read by each URL field rule as its
+        single-URL form is; more of them than MAX_SUBJECT holds are never read: TK-OVERSIZE in the rule's section."""
+        e = Engine(pc.build(os.path.join(PACKS, "server.yaml"))[0], "regex")
+        meta, docs = "http://169.254.169.254/latest/", "https://docs.python.org/3/"
+        want = e.decide("WebFetch", {"url": meta})
+        self.assertEqual(want["verdict"], "deny")
+        for args in ({"url": docs, "urls": [docs, meta]}, {"url": docs, "urls": [meta]}, {"url": None, "urls": [docs, meta]}):
+            with self.subTest(args=args):
+                self.assertEqual({k: e.decide("WebFetch", args)[k] for k in ("verdict", "rule_ids")},
+                                 {k: want[k] for k in ("verdict", "rule_ids")})
+        many = [f"https://h{i}.example/" for i in range(MAX_SUBJECT // 16)]
+        d = Engine({"tools": {"WebFetch": "http"}, "deny": [{"id": "N", "class": "http", "field": "internal",
+                                                            "pattern": "^true$"}]}, "regex").decide(
+            "WebFetch", {"url": docs, "urls": many})
+        self.assertEqual((d["verdict"], d["rule_ids"]), ("deny", ["TK-OVERSIZE"]))
+
     def test_a_bare_word_is_an_address_only_when_it_reads_as_one(self):
         """Every word starting with a digit read as an address: head -n 50, cat 1.txt and ls 2fa/ were egress."""
         e = Engine(pc.build(os.path.join(os.path.dirname(pc.__file__), "packs", "server.yaml"))[0])

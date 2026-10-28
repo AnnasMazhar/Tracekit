@@ -73,6 +73,9 @@ QWEN_TOOLS = {**GEMINI_TOOLS, "edit": "Edit", "grep_search": "Grep", "web_search
 # absolute_path to file_path, the directory tools' path to dir_path and read_many_files' paths to include; Qwen Code
 # kept the old names
 GEMINI_PATH_ARGS = ("file_path", "absolute_path", "notebook_path", "dir_path", "path")
+# a URL in Gemini CLI's web_fetch prompt: its scheme in any case (WHATWG URL parsing), up to a character JavaScript's
+# \s matches (the prompt is split on them)
+WEB_FETCH_URL = re.compile(r"https?://[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+", re.I)
 # a Delete is an Edit, as a Codex patch's Delete File is: the file rules (a credentials file, the transcripts) read it
 CURSOR_TOOLS = {"Shell": "Bash", "Read": "Read", "Write": "Write", "Grep": "Grep", "Delete": "Edit", "Task": "Task", "Edit": "Edit"}
 OPENCODE_TOOLS = {"bash": "Bash", "read": "Read", "write": "Write", "edit": "Edit", "apply_patch": "Edit",
@@ -172,10 +175,16 @@ def tool(harness, name, ti):
             ti.setdefault("file_path", files[0])
             if files != [ti["file_path"]]:
                 ti["paths"] = files
-        if name == "web_fetch" and "url" not in ti and isinstance(ti.get("prompt"), str):
-            m = re.search(r"https?://\S+", ti["prompt"])
-            if m:
-                ti["url"] = m.group(0)
+        if name == "web_fetch":   # Gemini CLI fetches every URL its prompt names, Qwen Code its `url`: each is decided
+            # lean: a URL Qwen Code's prompt only names is decided as if fetched; read the prompt for Gemini CLI alone
+            # if that stops a fetch a person needs
+            prompt = ti.get("prompt")
+            urls = list(dict.fromkeys([u for u in [ti.get("url")] if isinstance(u, str)]
+                                      + (WEB_FETCH_URL.findall(prompt) if isinstance(prompt, str) else [])))
+            if urls:
+                ti.setdefault("url", urls[0])
+                if urls != [ti["url"]]:
+                    ti["urls"] = urls
         return mapped, ti
     if harness == "opencode":
         # the path the tool itself reads decides, never another path key the model sent beside it (OpenCode drops

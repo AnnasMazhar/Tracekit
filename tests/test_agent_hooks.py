@@ -550,6 +550,23 @@ class GeminiQwenTargets(unittest.TestCase):
         # a shell command's dir_path is where it runs, not a file it reads
         self.assertNotIn("file_path", agent_hooks.tool("gemini", "run_shell_command", {"command": "ls", "dir_path": "/w"})[1])
 
+    def test_every_url_is_decided_as_its_single_url_form(self):
+        """Gemini CLI's web_fetch fetches every URL in its prompt (split on JavaScript's whitespace, a scheme in any
+        case); a `url` beside it, which Gemini CLI ignores, is decided too and replaces none of them."""
+        meta = "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+        docs = "https://docs.python.org/3/"
+        for pack in ("dev.yaml", "server.yaml", "strict.yaml"):
+            pol = load_policy(os.path.join(os.path.dirname(DEFAULT_POLICY), pack))
+            for harness in ("gemini", "qwen"):
+                single = ("web_fetch", {"prompt": f"fetch {meta}"})
+                for ti in ({"prompt": f"compare {docs} with {meta}"}, {"prompt": f"summarize {meta}", "url": docs},
+                           {"prompt": f"compare {docs}\ufeff{meta}"},
+                           {"prompt": f"compare {docs} with {meta.replace('http', 'HTTP', 1)}"},
+                           {"prompt": f"compare {docs}", "url": meta}):
+                    with self.subTest(pack=pack, harness=harness, ti=ti):
+                        self.same(pol, harness, ("web_fetch", ti), single)
+        self.assertEqual(agent_hooks.tool("gemini", "web_fetch", {"prompt": f"see {docs}"})[1], {"prompt": f"see {docs}", "url": docs})
+
 
 class ReasoningCaptureOn(DaemonCase):
     """reasoning_capture in the policy must not break runs of harnesses whose transcripts Tracekit never parses."""
