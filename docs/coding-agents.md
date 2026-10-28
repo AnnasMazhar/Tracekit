@@ -131,7 +131,8 @@ own. Hooks before this release record no prompt, and TK-X208 says `no_hook`.
 
 The hook also sends what the typed text says not to do ("don't touch billing.py", "read-only", "don't push", "no
 network") to the signer as [live constraints](policy-v2.md#live-constraints) (one stated only in text the harness added
-is recorded but not made live, and Claude Code shows a notice naming it): a later call that breaks one waits for your
+is recorded but not made live, and Claude Code shows a notice naming it; one typed after a wrapper's name in a sentence
+is live, though the text from that name on is recorded as untrusted): a later call that breaks one waits for your
 approval, and the agent reads why on stderr:
 
 ```text

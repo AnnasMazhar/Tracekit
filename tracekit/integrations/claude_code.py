@@ -29,14 +29,15 @@ first run where its transcript ended at SessionStart: the lines before are an ea
 At UserPromptSubmit, the typed part of the harness's prompt is recorded (`observe`, source
 <agent>:UserPromptSubmit, trusted); harness-wrapped parts are separate untrusted observations. `tracekit analyze --v2`
 reads a transcript prompt line as the person's only when one of these has its typed text (TK-X208 flags a line none
-has). Each constraint the typed part states (tracekit.constraints: "don't touch X", "read-only", "don't push", ...) goes
-to the signer first, each on its own, as a live constraint (`constraint_add`), which holds a later call that breaks it
-for a person's approval; the agent reads why on stderr. A scope ("only change X") is no live constraint (_live): holding
-every other write (tests, lockfiles) would ask too often; `tracekit analyze --v2` checks it. The session state keeps
-them (written before they are sent, so an unreachable signer loses none), and a later run of the session (after an idle
-close) gets them all again. A constraint can only hold more calls, so the agent's own identity adding one (it could add
-its own) weakens nothing: past the signer's cap of file constraints a further one is refused and every write of the run
-is held from then on, which the hook tells the person (exit 1, FULL on stderr).
+has). Each constraint the typed part states (tracekit.constraints: "don't touch X", "read-only", "don't push", ...), and
+each a wrapped part states whose wrapper follows other text on its line (midline_live), goes to the signer first, each
+on its own, as a live constraint (`constraint_add`), which holds a later call that breaks it for a person's approval;
+the agent reads why on stderr. A scope ("only change X") is no live constraint (_live): holding every other write
+(tests, lockfiles) would ask too often; `tracekit analyze --v2` checks it. The session state keeps them (written
+before they are sent, so an unreachable signer loses none), and a later run of the session (after an idle close) gets
+them all again. A constraint can only hold more calls, so the agent's own identity adding one (it could add its own)
+weakens nothing: past the signer's cap of file constraints a further one is refused and every write of the run is held
+from then on, which the hook tells the person (exit 1, FULL on stderr).
 
 System mode: the signer runs as its own user and the hook reaches it only through the socket the root-owned
 /etc/tracekit/client.json names (a TRACEKIT_SIGNER naming another is refused, and the call blocked); the signer
@@ -380,6 +381,30 @@ def _live(prompt):
     return [(kind, obj and obj[:256]) for kind, obj in constraints.extract(prompt) if kind != "only_change"]
 
 
+def _midline(prompt, start):
+    """Whether the wrapper prompt_parts found at `start` follows other text on its line. Claude Code puts its own at the
+    start of a line (the ultraplan handoff's sentence aside, _states)."""
+    while start and prompt[start - 1] != "\n" and prompt[start - 1].isspace():
+        start -= 1
+    return start > 0 and prompt[start - 1] != "\n"
+
+
+def _states(prompt, source, value, start):
+    """The live constraints (_live) a part of prompt_parts(prompt) states, read without its tags; none for an ultraplan
+    handoff that continues its own sentence."""
+    if source == "ultraplan" and prompt[:start].lower().endswith("remote agent content enclosed in "):
+        return []
+    return _live(re.sub(r"<[^<>]*>", "", value[:constraints.MAX_TEXT]))
+
+
+def midline_live(prompt, wrapped):
+    """The live constraints of each part of `wrapped` (prompt_parts(prompt)) whose wrapper follows other text on its
+    line (_midline): a wrapper's name the person typed in a sentence. They are live as well; the part stays untrusted,
+    and a constraint only holds more calls."""
+    return [c for source, value, start in wrapped if _midline(prompt, start)
+            for c in _states(prompt, source, value, start)]
+
+
 _WRAPPER_SOURCES = {
     "agent-message": "agent-message",
     "artifact-file-content": "artifact-file-content",
@@ -553,10 +578,12 @@ def _observe_values(values, limit=MAX_HARNESS_TEXT):
 
 
 def prompted(run, prompt):
-    """Each live constraint `prompt` states (_live), as a live constraint of `run`, each on its own (module
-    docstring). -> whether the signer took one only as a refusal past its cap (_constrain)."""
+    """Each live constraint the harness prompt `prompt` states as the hook reads it (its typed text, then midline_live),
+    as a live constraint of `run`, each on its own (module docstring). -> whether the signer took one only as a refusal
+    past its cap (_constrain)."""
+    typed, wrapped = prompt_parts(prompt)
     refused, full = [], False
-    for kind, obj in _live(prompt):
+    for kind, obj in dict.fromkeys(_live(typed) + midline_live(prompt, wrapped)):
         try:
             full = run.call("constraint_add", constraint={"kind": kind, **({"object": obj} if obj else {})}).get(
                 "refused") is True or full
@@ -641,15 +668,13 @@ def _handle(client, p, event, sid, tid):
         transcript = p.get("transcript_path") if isinstance(p.get("transcript_path"), str) else None
     if isinstance(prompt, str) and prompt:   # the harness's submitted prompt, including harness wrappers
         typed, wrapped = prompt_parts(prompt)
-        stated = _live(typed)
+        stated = [*dict.fromkeys(_live(typed) + (midline_live(prompt, wrapped) if AGENT == "claude-code" else []))]
         live = set(stated)
         unexpected = {}
         if AGENT == "claude-code":
             for source, value, start in wrapped:
-                continuation = source == "ultraplan" and prompt[:start].lower().endswith(
-                    "remote agent content enclosed in ")
-                if not continuation:
-                    for constraint in _live(re.sub(r"<[^<>]*>", "", value[:constraints.MAX_TEXT])):
+                if not _midline(prompt, start):
+                    for constraint in _states(prompt, source, value, start):
                         if constraint not in live:
                             unexpected.setdefault(constraint, source)
         try:   # its constraints first: a prompt too large for one observe frame still adds them

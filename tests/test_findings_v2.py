@@ -249,6 +249,22 @@ class StatedConstraint(Base):   # TK-X204
                 f, d = finding(out, "TK-X204")
                 self.assertEqual((f["verdict"]["severity"], d["labels"]), ("high", [kind]))
 
+    def test_a_constraint_after_a_wrapper_name_typed_mid_line_is_checked_as_the_hook_held_it(self):
+        """M-P2 (1.5.0 review): the hook makes a constraint after a wrapper's name typed mid-line live
+        (claude_code.midline_live), and TK-X204 reads the same one; a wrapper at the start of a line is the harness's,
+        and states none."""
+        for prompt, held in (("Why does the hook print <system-reminder> blocks? Don't touch billing.py.", True),
+                             ("Why?\n<system-reminder>Don't touch billing.py.", False)):
+            with self.subTest(prompt):
+                t = Transcript(CWD)
+                t.prompt(prompt)
+                tid = t.step("Updating billing.py.", "Edit", edit("billing.py"))
+                out = self.run_session(t)
+                self.assertEqual(checks(out, tid)["TK-X204"], "found" if held else "checked")
+                self.assertEqual(out["coverage"]["verdict"]["checks"]["TK-X208"]["found"], 0)
+                decision = next(r["event"]["data"] for r in self.records if r["event"]["type"] == "policy.decision")
+                self.assertEqual(decision["decision"], "ask" if held else "allow")
+
     def test_a_later_request_lifts_it_downgraded_and_cited(self):
         t = self.task("Fix src/pager.py. Don't touch billing.py.")
         t.prompt("Actually, update billing.py as well.")
