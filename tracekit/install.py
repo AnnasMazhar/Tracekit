@@ -278,16 +278,22 @@ def _hook_command(module="tracekit.hook", func="_entry", args=(), python=None, p
     python: an interpreter that has tracekit installed (system mode: OPT_PYTHON). If it cannot run the hook (the
     package or interpreter is missing), a pre-tool call (`pre`) is blocked unless the system config sets fail_mode
     open (then it runs, with an error the harness shows); a v2 hook, or one that answers in JSON (json_deny), that
-    cannot run blocks the call in dev mode too. Any other event is never blocked (_blocking, which json_deny goes to)."""
+    cannot run blocks the call in dev mode too, and a v1 one with TRACEKIT_FAIL_CLOSED=1 (the policy's fail_mode is
+    in a file only the hook reads). Any other event is never blocked (_blocking, which json_deny goes to)."""
     if python:
         return _blocking(" ".join([shlex.quote(python), "-I", "-m", module, *args]),
                          f"grep -Eq '\"fail_mode\"[[:space:]]*:[[:space:]]*\"open\"' {client.SYSTEM_CONFIG} 2>/dev/null "
                          "&& { echo 'tracekit: the hook could not run; call NOT recorded (fail_mode open)' >&2; "
                          "exit 1; }; ", pre, json_deny)
     cmd = _dev_hook_command(module, func, args)
-    # lean: on Windows a dev v2 or agy hook that cannot start fails open (no POSIX shell to wrap it in); wrap it in
-    # PowerShell when Windows dev mode must fail closed
-    return _blocking(cmd, pre=pre, json_deny=json_deny) if (module in V2_HOOKS or json_deny) and os.name != "nt" else cmd
+    # lean: on Windows a dev hook that cannot start fails open (no POSIX shell to wrap it in), a v1 one whatever
+    # TRACEKIT_FAIL_CLOSED says; wrap it in PowerShell when Windows dev mode must fail closed
+    if os.name == "nt":
+        return cmd
+    if module in V2_HOOKS or json_deny:
+        return _blocking(cmd, pre=pre, json_deny=json_deny)
+    return _blocking(cmd, "[ \"$TRACEKIT_FAIL_CLOSED\" = 1 ] || { echo 'tracekit: the hook could not run; call NOT "
+                          "recorded (set TRACEKIT_FAIL_CLOSED=1 to block it)' >&2; exit 1; }; ") if pre else cmd
 
 
 def _dev_hook_argv(module, func, args):
@@ -361,11 +367,18 @@ def _hook_version(group):
     hooks = group.get("hooks") if isinstance(group, dict) else None
     cmds = [h["command"] for h in hooks if isinstance(h, dict) and isinstance(h.get("command"), str)] \
         if isinstance(hooks, list) else []
-    if any(V2_HOOK in c for c in cmds):
-        return "v2"
-    if any("tracekit.hook" in c or re.search(r"tracekit[/\\]hook\.py", c) for c in cmds):
-        return "v1"
-    return None
+    versions = {_cmd_version(c) for c in cmds}
+    return "v2" if "v2" in versions else "v1" if "v1" in versions else None
+
+
+# the module Tracekit's hook command runs (-m, or imports from under -c), or an old v1 command's path to hook.py
+_HOOK_CMD = re.compile(rf"(?:-m |from )(tracekit\.hook|{re.escape(V2_HOOK)})(?![\w.])|(?<![\w.-])tracekit[/\\]hook\.py\b")
+
+
+def _cmd_version(cmd):
+    """"v2" for a command that runs Tracekit's v2 hook, "v1" for its v1 hook, else None (a person's own)."""
+    m = _HOOK_CMD.search(cmd) if isinstance(cmd, str) else None
+    return m and ("v2" if m.group(1) == V2_HOOK else "v1")
 
 
 def _is_ours(group):
@@ -381,7 +394,7 @@ class ServiceError(Exception):
 
 
 def _atomic_write_json(path, obj, mode=0o600):
-    files.write_json(path, obj, mode)
+    files.write_json(path, obj, mode, ensure_ascii=False)
 
 
 def _backup(path, data):
@@ -390,6 +403,17 @@ def _backup(path, data):
         return files.backup(d, os.path.basename(path), data)
     finally:
         files.close(d)
+
+
+def _backup_changed(path, txt, s):
+    """Back up `path`, whose text was `txt` (None: no file), when settings `s` differ from it. -> whether they do: a
+    file whose settings didn't change is neither written nor backed up again."""
+    if txt is None:
+        return True
+    if (json.loads(txt) if txt.strip() else {}) == s:
+        return False
+    _backup(path, txt.encode("utf-8"))
+    return True
 
 
 def user_settings():
@@ -414,6 +438,19 @@ def user_settings_all():
             seen.add(os.path.realpath(p))
             out.append(p)
     return out
+
+
+def record_hooks_settings(path):
+    """Record user settings file `path`, where init put the hooks, as hooks_settings in the client config (its other
+    keys stay), as init_dev does for v1: user_settings_all then finds them from a shell without the same
+    CLAUDE_CONFIG_DIR."""
+    d = client.client_dir()
+    fd = files.open_dir(d)
+    try:
+        cfg = _read_config(fd)
+    finally:
+        files.close(fd)
+    _write_client_dir(d, {**cfg, "hooks_settings": os.path.abspath(path)})
 
 
 AGENT_FILE_MAX = 4 << 20   # bytes of an agent's settings file doctor and init read at most
@@ -574,8 +611,12 @@ def _install_hooks_at(d, settings_path, uninstall, proxy_url, extra, mode, pytho
             v = _hook_version(g) if isinstance(g, dict) else None
             if v is None:
                 groups.append(g)
-            elif uninstall or v != new:
+                continue
+            if uninstall or v != new:
                 replaced.add(v)
+            rest = [h for h in g["hooks"] if not (isinstance(h, dict) and _cmd_version(h.get("command")))]
+            if rest:   # a person's own hooks filed into Tracekit's group stay; Tracekit's go
+                groups.append({**g, "hooks": rest})
         if not uninstall:
             cmd = _hook_command(module, args=(ev,) if module == V2_HOOK else (), python=python,   # v2: names its event
                                 pre=ev == "PreToolUse")
@@ -621,7 +662,7 @@ def _install_hooks_at(d, settings_path, uninstall, proxy_url, extra, mode, pytho
         if _parse_settings(raw, settings_path) == s:
             return s.get(THINKING)
         files.backup(d, name, raw)
-    files.write(d, name, files.json_bytes(s), mode)
+    files.write(d, name, files.json_bytes(s, ensure_ascii=False), mode)
     if replaced:
         old = " and ".join(sorted(replaced))
         print(f"Tracekit {old} hooks removed from {settings_path}" if uninstall else
@@ -658,7 +699,7 @@ def thinking_on(settings_path):
                 _thinking(s, True, False)
                 if raw is not None:
                     files.backup(d, name, raw)
-                files.write(d, name, files.json_bytes(s), 0o600)
+                files.write(d, name, files.json_bytes(s, ensure_ascii=False), 0o600)
             return s.get(THINKING)
         finally:
             files.close(d)

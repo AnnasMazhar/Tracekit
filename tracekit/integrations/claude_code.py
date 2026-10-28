@@ -26,17 +26,19 @@ content) from the transcript, which no hook payload carries. A later run of the 
 tailer start where the hook last saw the transcripts while the earlier run was open (_seen), and a resumed session's
 first run where its transcript ended at SessionStart: the lines before are an earlier run's.
 
-At UserPromptSubmit, the typed part of the harness's prompt is recorded (`observe`, source
-<agent>:UserPromptSubmit, trusted); harness-wrapped parts are separate untrusted observations. `tracekit analyze --v2`
-reads a transcript prompt line as the person's only when one of these has its typed text (TK-X208 flags a line none
-has). Each constraint the typed part states (tracekit.constraints: "don't touch X", "read-only", "don't push", ...) goes
-to the signer first, each on its own, as a live constraint (`constraint_add`), which holds a later call that breaks it
-for a person's approval; the agent reads why on stderr. A scope ("only change X") is no live constraint (_live): holding
-every other write (tests, lockfiles) would ask too often; `tracekit analyze --v2` checks it. The session state keeps
-them (written before they are sent, so an unreachable signer loses none), and a later run of the session (after an idle
-close) gets them all again. A constraint can only hold more calls, so the agent's own identity adding one (it could add
-its own) weakens nothing: past the signer's cap of file constraints a further one is refused and every write of the run
-is held from then on, which the hook tells the person (exit 1, FULL on stderr).
+At UserPromptSubmit, the typed part of the harness's prompt is recorded (`observe`, source <agent>:UserPromptSubmit,
+trusted); harness-wrapped parts are separate untrusted observations, and so is the whole of a turn Claude Code's payload
+says no person typed (a `source` other than user or sdk; recorded as <agent>:<source>). `tracekit analyze --v2` reads a
+transcript prompt line as the person's only when one of these has its typed text (TK-X208 flags a line none has). Each
+constraint the typed part states (tracekit.constraints: "don't touch X", "read-only", "don't push", ...), and each a
+wrapped part states whose wrapper follows other text on its line (midline_live), goes to the signer first, each on its
+own, as a live constraint (`constraint_add`), which holds a later call that breaks it for a person's approval; the agent
+reads why on stderr. A scope ("only change X") is no live constraint (_live): holding every other write (tests,
+lockfiles) would ask too often; `tracekit analyze --v2` checks it. The session state keeps them (written before they are
+sent, so an unreachable signer loses none), and a later run of the session (after an idle close) gets them all again. A
+constraint can only hold more calls, so the agent's own identity adding one (it could add its own) weakens nothing: past
+the signer's cap of file constraints a further one is refused and every write of the run is held from then on, which the
+hook tells the person (exit 1, FULL on stderr, and in the prompt's notice when it prints one).
 
 System mode: the signer runs as its own user and the hook reaches it only through the socket the root-owned
 /etc/tracekit/client.json names (a TRACEKIT_SIGNER naming another is refused, and the call blocked); the signer
@@ -79,6 +81,10 @@ RESUMED = ("resume", "fork")   # SessionStart sources whose transcript already h
 FULL = ("[tracekit] the run has the most file constraints the signer takes: what this prompt says not to change was "
         "not added, so every write of the run is now held for your approval")
 APPROVAL_WAIT_S = 540   # a PreToolUse hook, approval wait included, answers within this: below its timeout (install.HOOK_TIMEOUT)
+# lean: a session's state is kept this long after its last hook event (Claude Code's default cleanupPeriodDays, after
+# which it deletes the transcript); a session continued later starts without its constraints; keep the state while
+# its transcript exists if sessions are continued later than that
+SESSION_KEEP_S = 30 * 86400
 
 
 class HookClient(Client):
@@ -117,14 +123,15 @@ def _load(path):
             time.sleep(0.05)
 
 
-def _run(client, sid, register=True, send=None, transcript=None, resumed=False, stated=(), **fields):
+def _run(client, sid, register=True, send=None, transcript=None, resumed=False, stated=(), skip=0, **fields):
     """(the session's run, registered on its first event; with `send`, the signer's reply to that event call, sent with
     the session's stream and next client_seq under the session lock so parallel hooks reach the signer in client_seq
     order, and sent again on a new run when the signer has closed the stored one (idle); without `register`, the stored
     run is marked ended instead, and the session's next event that registers starts the new one). `transcript`
     (SessionStart): kept in the session state; each run of the session gets a tailer on it, which starts where the
     session's earlier run was last seen open (_seen; `resumed`: a resumed session's transcript as it is now).
-    `stated`: the constraints a prompt states, kept in the session state; each run gets the session's (_constrain)."""
+    `stated`: the constraints a prompt states, kept in the session state; each run gets the session's (_constrain).
+    `skip`: client_seq values left unsent before `send` (_send)."""
     path = _state(sid)
     with open(path[:-len(".json")] + ".lock", "a") as lk:   # parallel tool calls must not register two runs
         lock_file(lk)
@@ -159,7 +166,7 @@ def _run(client, sid, register=True, send=None, transcript=None, resumed=False, 
         if st.get("ended"):   # the signer said so already: asking again would only count as a late write
             raise RPCError("run_closed", f"run {st['run_id']} ended")
         try:
-            return _send(client, path, st, send, fields, seen)
+            return _send(client, path, st, send, fields, seen, skip)
         except RPCError as e:
             if e.code not in ("run_closed", "unknown_run"):
                 raise
@@ -169,7 +176,7 @@ def _run(client, sid, register=True, send=None, transcript=None, resumed=False, 
             st = _register(client, path, st)
             _constrain(client, path, st)
             _tail(client, path, st)
-            return _send(client, path, st, send, fields, seen)
+            return _send(client, path, st, send, fields, seen, skip)
 
 
 def _register(client, path, prev=None, offsets=None):
@@ -279,13 +286,15 @@ def _tail(client, path, st):
     files.write_json(path, st)
 
 
-def _send(client, path, st, method, fields, seen=None):
-    """`seen`: _seen before the call; once the run has taken it, the run was open with those lines written."""
-    run = RunHandle(client, st)
-    files.write_json(path, dict(st, seq=st["seq"] + 1))
-    out = run.call(method, stream=st["stream"], client_seq=st["seq"], **fields)
+def _send(client, path, st, method, fields, seen=None, skip=0):
+    """`seen`: _seen before the call; once the run has taken it, the run was open with those lines written. `skip`:
+    client_seq values left unsent before this event, events the hook could not send: the signer records the gap and
+    marks the run's provenance index partial, so `from: untrusted` rules fail closed."""
+    run, seq = RunHandle(client, st), st["seq"] + skip
+    files.write_json(path, dict(st, seq=seq + 1))
+    out = run.call(method, stream=st["stream"], client_seq=seq, **fields)
     if seen:
-        files.write_json(path, dict(st, seq=st["seq"] + 1, offsets=seen))
+        files.write_json(path, dict(st, seq=seq + 1, offsets=seen))
     return run, out
 
 
@@ -303,13 +312,20 @@ def _pre(client, p, sid, tid):
               file=sys.stderr)
         return 2
     if d["decision"] == "ask":
-        why = f": {d['reason'].removesuffix('.')}" if d.get("reason") else ""   # a live constraint's says which and what to do
+        reason = d.get("reason") or ""   # a live constraint's says which and what to do
+        why = f": {reason if reason.endswith('..') else reason.removesuffix('.')}" if reason else ""   # keeps a ...
         try:
             cap()
             aid = run.call("approval_request", tool_call_id=tid)["approval_id"]
             # a named signer (system mode's, or $TRACEKIT_SIGNER's) may not be the person's default; quoted: outside
-            # system mode the agent may have set it
-            cmd = "tracekit approvals" + (f" --signer {shlex.quote(client.signer)}" if client.signer else "")
+            # system mode the agent may have set it. On Windows (cmd.exe reads no single quotes) in double quotes,
+            # which cmd.exe and PowerShell both read as written but for a quote (PowerShell's curly ones too), $, a
+            # backtick, cmd.exe's %VAR% or a line break: a name holding one is left for the person to fill in
+            named = client.signer and (
+                shlex.quote(client.signer) if os.name != "nt" else
+                "<TRACEKIT_SIGNER>" if re.search(r'["\u201c-\u201e$`%\x00-\x1f\x7f]', client.signer) else
+                f'"{client.signer}"')
+            cmd = "tracekit approvals" + (f" --signer {named}" if named else "")
             print(f"[tracekit] waiting for approval {aid} ({'; '.join(d['rule_ids'])}){why}; a person approves it "
                   f"from another terminal with `{cmd} approve {aid}` or rejects it with `{cmd} reject {aid}`",
                   file=sys.stderr, flush=True)
@@ -369,6 +385,38 @@ def _live(prompt):
     return [(kind, obj and obj[:256]) for kind, obj in constraints.extract(prompt) if kind != "only_change"]
 
 
+_LINE_START = re.compile(r"\n[^\S\n]*")   # where a line's text starts, as _midline reads it
+
+
+def _midline(prompt, start):
+    """Whether the wrapper prompt_parts found at `start` follows other text on its line. Claude Code puts its own at the
+    start of a line (the ultraplan handoff's sentence aside, _states)."""
+    while start and prompt[start - 1] != "\n" and prompt[start - 1].isspace():
+        start -= 1
+    return start > 0 and prompt[start - 1] != "\n"
+
+
+def _handoff(prompt, source, start):
+    """Whether the part at `start` is Claude Code's ultraplan handoff, whose tag continues its own sentence."""
+    return source == "ultraplan" and prompt[:start].lower().endswith("remote agent content enclosed in ")
+
+
+def _states(prompt, source, value, start):
+    """The live constraints (_live) a part of prompt_parts(prompt) states, read without its tags; none for an ultraplan
+    handoff (_handoff)."""
+    if _handoff(prompt, source, start):
+        return []
+    return _live(re.sub(r"<[^<>]*>", "", value[:constraints.MAX_TEXT]))
+
+
+def midline_live(prompt, wrapped):
+    """The live constraints of each part of `wrapped` (prompt_parts(prompt)) whose wrapper follows other text on its
+    line (_midline): a wrapper's name the person typed in a sentence. They are live as well; the part stays untrusted,
+    and a constraint only holds more calls."""
+    return [c for source, value, start in wrapped if _midline(prompt, start)
+            for c in _states(prompt, source, value, start)]
+
+
 _WRAPPER_SOURCES = {
     "agent-message": "agent-message",
     "artifact-file-content": "artifact-file-content",
@@ -425,28 +473,32 @@ def _wrapped(agent):
             r'|<pasted_content\b'
             r'|\[SYSTEM NOTIFICATION - NOT USER INPUT\]'
             r'|\[SCHEDULED TASK - AUTOMATED FIRING OF A CONFIGURED PROMPT\]'
-            r'|(?:(?:Another Claude session|A peer session|The coordinator) sent a message'
-            r'(?: while you were working)?:\s*)?'
+            r'|\[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT\]'
+            r'|(?:(?:(?:Another Claude session|A peer session|The coordinator) sent a message'
+            r'|A message arrived from \S{1,64})(?: while you were working)?:\s*)?'
             rf'<({tags})[\s>]'
-            r'|(?:Another Claude session|A peer session|The coordinator) sent a message'
+            r'|(?:Another Claude session|A peer session|The coordinator|The \S{1,64} plugin) sent a message'
             r'(?: while you were working)?:'
-            r'|Base directory for this skill:', re.IGNORECASE)
+            r'|Your background observer \([\w:-]{0,64}\) sent a report(?: while you were working)?:'
+            r'|Base directory for this skill:', re.IGNORECASE | re.ASCII)
     if agent == "gemini-cli":
         return re.compile(r'--- Content from referenced files ---')
     return re.compile(r'(?!)')
 
 
 def prompt_parts(prompt, agent=None):
-    """Return (person-typed text, [(source, untrusted text)]) from a harness prompt."""
+    """Return (person-typed text, [(source, untrusted text, start)]) from a harness prompt. A wrapper other than a
+    closed paste makes the rest of the prompt untrusted; one that follows other text on its line (_midline) is a part
+    only up to the next wrapper that starts a line, where the next part (to the end) begins."""
     agent = AGENT if agent is None else agent
-    typed, parts, pos = [], [], 0
+    typed, parts, pos, rest = [], [], 0, False   # rest: all from pos on is untrusted, past a mid-line wrapper's part
     wrapped = _wrapped(agent)
     while match := wrapped.search(prompt, pos):
         start = match.start()
         tag = (match.group(2) if match.lastindex and match.lastindex >= 2 else "") or ""
         tag = tag.lower()
         typed.append(prompt[pos:start])
-        ident = match.group(1) if match.lastindex else None
+        ident = match.group(1) if match.lastindex and not rest else None
         if ident:
             # Claude Code's scrub prevents a pasted body or typed text from forging its 16-bit session-shared id.
             close = f'</pasted_content id="{ident}">'
@@ -464,10 +516,25 @@ def prompt_parts(prompt, agent=None):
             source = "skill"
         elif agent == "gemini-cli":
             source = "referenced-file"
+        elif "plugin sent a message" in match.group(0).lower():
+            source = "plugin-message"
         elif "sent a message" in match.group(0).lower():
             source = "peer-message"
+        elif match.group(0).lower().startswith("your background observer"):
+            source = "observer-report"
+        elif match.group(0).lower().startswith("[message from"):
+            source = "non-user-message"
         else:
             source = "scheduled-task" if match.group(0).lower().startswith("[scheduled") else "system-notification"
+        if not rest and _midline(prompt, start) and not _handoff(prompt, source, start):   # a name the person typed:
+            # harness text after it starts a line
+            # each line start in turn: a lead at the end of the person's line ("... sent a message:") would run on into
+            # the wrapper on the next one, which a search for whole matches would then skip
+            pos = next((n.end() for n in _LINE_START.finditer(prompt, start) if wrapped.match(prompt, n.end())), None)
+            if pos is not None:
+                parts.append((source, prompt[start:pos], start))
+                rest = True
+                continue
         parts.append((source, prompt[start:], start))
         break
     else:
@@ -542,10 +609,12 @@ def _observe_values(values, limit=MAX_HARNESS_TEXT):
 
 
 def prompted(run, prompt):
-    """Each live constraint `prompt` states (_live), as a live constraint of `run`, each on its own (module
-    docstring). -> whether the signer took one only as a refusal past its cap (_constrain)."""
+    """Each live constraint the harness prompt `prompt` states as the hook reads it (its typed text, then midline_live),
+    as a live constraint of `run`, each on its own (module docstring). -> whether the signer took one only as a refusal
+    past its cap (_constrain)."""
+    typed, wrapped = prompt_parts(prompt)
     refused, full = [], False
-    for kind, obj in _live(prompt):
+    for kind, obj in dict.fromkeys(_live(typed) + midline_live(prompt, wrapped)):
         try:
             full = run.call("constraint_add", constraint={"kind": kind, **({"object": obj} if obj else {})}).get(
                 "refused") is True or full
@@ -577,18 +646,21 @@ def _unfinished(client, sid):
 
 
 def _prune():
-    """Removes session and tool call state no hook has written for longer than the signer's default run idle timeout:
-    the signer has closed those runs, and a call that never got its PostToolUse leaves its state behind."""
+    """Removes the runtime state no hook has written for a while: a session's after SESSION_KEEP_S, as it carries the
+    session's constraints and transcript to its later runs (after an idle close, or a resume); any other (a tool
+    call's, which one that never got its PostToolUse leaves behind, or a lock no state needs) after the signer's
+    default run idle timeout, when the signer has closed its run."""
     from tracekit.signer.service import IDLE_S
-    old = time.time() - IDLE_S
+    now = time.time()
     for f in sorted(glob.glob(os.path.join(glob.escape(autospawn.runtime_dir()), "claude-code-*")),
                     key=lambda f: f.endswith(".lock")):   # the state first, then the locks it no longer needs
         # lean: a lock goes only once its session state has; a hook that resumes that very session at this instant
         # could lock a fresh file beside one still held, so two runs get registered, rare enough for dev mode
         if f.endswith(".lock") and os.path.exists(f[:-len(".lock")] + ".json"):
             continue
+        session = f.endswith(".json") and os.path.basename(f).count(".") == 1   # not claude-code-<sid>.<call>.json
         try:
-            if os.path.getmtime(f) < old:
+            if os.path.getmtime(f) < now - (SESSION_KEEP_S if session else IDLE_S):
                 os.remove(f)
         except OSError:   # removed by a parallel hook
             pass
@@ -626,16 +698,19 @@ def _handle(client, p, event, sid, tid):
         _prune()
         transcript = p.get("transcript_path") if isinstance(p.get("transcript_path"), str) else None
     if isinstance(prompt, str) and prompt:   # the harness's submitted prompt, including harness wrappers
-        typed, wrapped = prompt_parts(prompt)
-        stated = _live(typed)
+        source = p.get("source") if AGENT == "claude-code" else None
+        if source in (None, "user", "sdk"):
+            typed, wrapped = prompt_parts(prompt)
+        else:   # a turn no person typed (system, loop_wakeup, schedule_wakeup, poll_event): untrusted as a whole
+            name = source if isinstance(source, str) and re.fullmatch(r"[a-z_]{1,64}", source) else "non-user"
+            typed, wrapped = "", [(name, prompt, 0)]
+        stated = [*dict.fromkeys(_live(typed) + (midline_live(prompt, wrapped) if AGENT == "claude-code" else []))]
         live = set(stated)
         unexpected = {}
         if AGENT == "claude-code":
             for source, value, start in wrapped:
-                continuation = source == "ultraplan" and prompt[:start].lower().endswith(
-                    "remote agent content enclosed in ")
-                if not continuation:
-                    for constraint in _live(re.sub(r"<[^<>]*>", "", value[:constraints.MAX_TEXT])):
+                if not _midline(prompt, start):
+                    for constraint in _states(prompt, source, value, start):
                         if constraint not in live:
                             unexpected.setdefault(constraint, source)
         try:   # its constraints first: a prompt too large for one observe frame still adds them
@@ -671,16 +746,16 @@ def _handle(client, p, event, sid, tid):
                            for kind, obj in unexpected)
             shown, more = names[:3], len(names) - 3
             detail = ", ".join(shown) + (f" and {more} more" if more > 0 else "")
-            messages.append(f"[tracekit] {len(unexpected)} constraint(s) in text the harness added "
+            messages.append(f"[tracekit] {len(unexpected)} constraint(s) in text you pasted or the harness added "
                             f"({sources}: {detail}) were recorded, not made live")
-        if cut:
-            _run(client, sid, send="observe", source=f"{AGENT}:harness-cut", trust="untrusted",
+        if cut:   # the cut text is an observation the signer never gets: one client_seq skipped says so (_send)
+            _run(client, sid, send="observe", skip=1, source=f"{AGENT}:harness-cut", trust="untrusted",
                  value=f"Harness text was cut after {MAX_HARNESS_TEXT} characters ({', '.join(cut)}).")
             messages.append(f"[tracekit] oversized untrusted text was cut after {MAX_HARNESS_TEXT} characters "
-                            f"({', '.join(cut)}); values in the cut text are not marked untrusted, so a "
-                            f"from: untrusted rule won't hold a call that uses them")
-        if messages and AGENT == "claude-code":
-            print(json.dumps({"systemMessage": "\n".join(messages)}))
+                            f"({', '.join(cut)}); for the rest of the run a from: untrusted rule applies to every "
+                            f"call its pattern matches, whatever the value's source")
+        if messages and AGENT == "claude-code":   # Claude Code then shows this, not stderr: FULL goes here too
+            print(json.dumps({"systemMessage": "\n".join([FULL] * bool(refused) + messages)}))
         return 1 if refused else 0   # shown to the person (FULL, on stderr), never blocking the prompt
     # SessionStart, or any other first event of the session, registers the run; a resumed (or forked) session's
     # transcript holds its earlier history, which earlier runs recorded

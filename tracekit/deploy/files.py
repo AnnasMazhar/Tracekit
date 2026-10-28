@@ -165,15 +165,21 @@ def backup(d, name, data):
     return bak
 
 
-def json_bytes(obj):
-    return (json.dumps(obj, indent=2) + "\n").encode("utf-8")
+def json_bytes(obj, ensure_ascii=True):
+    """obj as indented JSON in UTF-8. ensure_ascii=False keeps non-ASCII text as it is (a coding agent's settings file,
+    which its agent and every reader read as UTF-8) instead of \\u escapes; text UTF-8 can't encode (a lone surrogate,
+    valid JSON as \\ud83d) is escaped then, as with ensure_ascii."""
+    try:
+        return (json.dumps(obj, indent=2, ensure_ascii=ensure_ascii) + "\n").encode("utf-8")
+    except UnicodeEncodeError:
+        return json_bytes(obj)
 
 
-def write_json(path, obj, mode=0o600, uid=None, gid=None, owners=None):
+def write_json(path, obj, mode=0o600, uid=None, gid=None, owners=None, ensure_ascii=True):
     """write() for a full path: the parent directory must already exist and is opened without following a symlink."""
     d = open_dir(os.path.dirname(os.path.abspath(path)), owners)
     try:
-        write(d, os.path.basename(path), json_bytes(obj), mode, uid, gid)
+        write(d, os.path.basename(path), json_bytes(obj, ensure_ascii), mode, uid, gid)
     finally:
         close(d)
 
