@@ -24,15 +24,13 @@ import http.server
 import json
 import os
 import re
-import socketserver
 import sys
-import threading
 import time
 import urllib.error
 import urllib.request
 import zlib
 
-from . import client, privacy
+from . import client, netserver, privacy
 from .core import content_ref, new_id, now_ts
 from .netserver import body_length, read_body
 from .observe import LOOPBACK_HOSTS, _host_only
@@ -204,6 +202,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def handle_one_request(self):
+        self.server.restart_deadline()
+        super().handle_one_request()
+
     def _error(self, status, msg):
         body = json.dumps({"type": "error", "error": {"type": "api_error", "message": msg}}).encode()
         self.send_response(status)
@@ -277,6 +279,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         raw_tail = []
         resp = None
         chunked_response = False
+        self.server.stop_deadline()   # the request is in; the model's answer may stream for minutes
         try:
             try:
                 resp = urllib.request.urlopen(req, timeout=600)
@@ -343,34 +346,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 pass
 
 
-class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
-    daemon_threads = True
-    allow_reuse_address = True
-
-    def __init__(self, *args, **kwargs):
-        self._request_slots = threading.BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
-        super().__init__(*args, **kwargs)
-
-    def process_request(self, request, client_address):
-        if not self._request_slots.acquire(blocking=False):
-            try:
-                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
-            except OSError:
-                pass
-            finally:
-                self.shutdown_request(request)
-            return
-        try:
-            super().process_request(request, client_address)
-        except BaseException:
-            self._request_slots.release()
-            raise
-
-    def process_request_thread(self, request, client_address):
-        try:
-            super().process_request_thread(request, client_address)
-        finally:
-            self._request_slots.release()
+class Server(netserver.Server):
+    def __init__(self, address, handler):   # every client is local: one address, so its limit is the overall one
+        super().__init__(address, handler, max_threads=MAX_CONCURRENT_REQUESTS, max_per_ip=MAX_CONCURRENT_REQUESTS)
 
 
 def serve(home, port=None, upstream=None, host="127.0.0.1"):

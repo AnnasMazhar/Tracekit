@@ -1415,14 +1415,9 @@ def server(feed, host, port, token, tls=None, login=None, desk=None, runs=None, 
         raise ValueError("the viewer needs a token")
     hosts = [host] + ([urlsplit(login.redirect_uri).hostname] if login else [])
 
-    class Handler(observe.make_handler(feed, token, hosts, secure=bool(tls), login=login, approvals=desk, runs=runs,
-                                       why=why)):
-        def long_request(self):
-            self.server.stop_deadline()   # an event stream lasts as long as the page is open, a replay its trials
-
-        def stream_slot(self):
-            return self.server.to_stream(self.client_address[0])
-    return Server((host, port), Handler, tls, max_threads=THREADS, max_per_ip=PER_IP, max_streams=STREAMS,
+    handler = observe.bounded(observe.make_handler(feed, token, hosts, secure=bool(tls), login=login, approvals=desk,
+                                                   runs=runs, why=why))
+    return Server((host, port), handler, tls, max_threads=THREADS, max_per_ip=PER_IP, max_streams=STREAMS,
                   max_streams_per_ip=STREAMS_PER_IP)
 
 

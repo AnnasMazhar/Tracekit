@@ -252,7 +252,7 @@ class Surfaces(unittest.TestCase):
         return srv, SECRET, [("GET", f"/nope?token={SECRET}", {}, 404), ("POST", "/metrics", {}, 501)]
 
     def otlp(self):
-        srv = ThreadingHTTPServer(("127.0.0.1", 0), otlp.make_handler(otlp.Receiver(lambda event, attach: {})))
+        srv = otlp.serve("127.0.0.1", 0, otlp.Receiver(lambda event, attach: {}))
         auth = {"Authorization": f"Bearer {SECRET}"}
         return srv, SECRET, [("POST", f"/nope?token={SECRET}", auth, 404),
                              ("POST", "/v1/traces", {**auth, "Content-Length": BIG}, 413),
@@ -576,8 +576,7 @@ class PlainHttp(unittest.TestCase):
     def test_loopback_receivers_answer_only_a_loopback_host(self):
         """A web page can point a name it controls at 127.0.0.1; the OTLP receiver and the proxy answer only
         requests addressed to a loopback name."""
-        for srv, method, path in ((ThreadingHTTPServer(("127.0.0.1", 0), otlp.make_handler(
-                otlp.Receiver(lambda event, attach: {}))), "POST", "/nope"),
+        for srv, method, path in ((otlp.serve("127.0.0.1", 0, otlp.Receiver(lambda event, attach: {})), "POST", "/nope"),
                                   (proxy.Server(("127.0.0.1", 0), proxy.Handler), "GET", "/__tracekit_health")):
             srv.daemon_threads = True
             threading.Thread(target=srv.serve_forever, daemon=True).start()

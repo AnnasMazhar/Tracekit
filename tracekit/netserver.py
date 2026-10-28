@@ -1,4 +1,5 @@
-"""HTTP(S) server for the network services (signer, issuer, gateway, viewer, Slack bridge, metrics, witness, ingest).
+"""HTTP(S) server for the network services (signer, issuer, gateway, viewer, Slack bridge, metrics, witness, ingest)
+and the loopback ones (OTLP receiver, proxy, `tracekit observe`).
 
 The TLS handshake runs in the connection's own thread under a timeout, never in accept() on the serving thread, so a
 client that connects and says nothing holds one handler slot until it times out instead of stalling every client.
@@ -10,6 +11,7 @@ connection, starts it again before reading the next one (restart_deadline), so a
 event stream also leaves the request limits for limits of its own (to_stream), so open pages never use up the
 requests their address may make."""
 import socket
+import sys
 import threading
 import time
 from http.server import ThreadingHTTPServer
@@ -138,6 +140,11 @@ class Server(ThreadingHTTPServer):
             else:
                 self._slots.release()
                 self._ip_release(client_address[0])
+
+    def handle_error(self, request, client_address):
+        """A connection cut by its deadline, a timeout or the client is routine: no traceback for it."""
+        if not isinstance(sys.exc_info()[1], (ConnectionError, socket.timeout)):
+            super().handle_error(request, client_address)
 
     def to_stream(self, ip):
         """From the handler's thread, before it answers with an event stream: the connection leaves the request limits

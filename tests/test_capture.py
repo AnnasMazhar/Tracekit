@@ -343,32 +343,15 @@ class SSEScanBounds(unittest.TestCase):
     def test_proxy_rejects_connections_when_worker_limit_is_reached(self):
         from tracekit.proxy import Handler, MAX_CONCURRENT_REQUESTS, Server
 
-        class FakeSocket:
-            def __init__(self):
-                self.sent = b""
-
-            def sendall(self, data):
-                self.sent += data
-
-            def shutdown(self, _how):
-                pass
-
-            def close(self):
-                pass
-
         server = Server(("127.0.0.1", 0), Handler)
-        acquired = 0
-        try:
-            for _ in range(MAX_CONCURRENT_REQUESTS):
-                self.assertTrue(server._request_slots.acquire(blocking=False))
-                acquired += 1
-            request = FakeSocket()
-            server.process_request(request, ("127.0.0.1", 1))
-            self.assertIn(b"503 Service Unavailable", request.sent)
-        finally:
-            for _ in range(acquired):
-                server._request_slots.release()
-            server.server_close()
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        held = [socket.create_connection(server.server_address) for _ in range(MAX_CONCURRENT_REQUESTS + 1)]
+        for s in held:
+            self.addCleanup(s.close)
+        held[-1].settimeout(5)   # well inside the read timeout that would close it if it had been taken
+        self.assertEqual(held[-1].recv(1), b"", "a connection past the limit is closed at once")
 
 
 class ProxyStack(Stack):

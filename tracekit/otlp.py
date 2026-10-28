@@ -45,10 +45,10 @@ import re
 import socket
 import sys
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 
 from . import client, policy, privacy
-from .netserver import body_length, read_body
+from .netserver import MAX_THREADS, Server, body_length, read_body
 from .observe import LOOPBACK_HOSTS, _host_only
 from .usage import from_otel
 from .core import GENESIS, SCHEMA_VERSION, jsonable, now_ts
@@ -521,6 +521,10 @@ def make_handler(receiver):
         def log_message(self, *a):
             pass
 
+        def handle_one_request(self):   # each request on a kept-alive exporter connection gets its own deadline
+            self.server.restart_deadline()
+            super().handle_one_request()
+
         def _out(self, code, headers, data):
             self.send_response(code)
             for k, v in headers.items():
@@ -593,9 +597,8 @@ def decode_protobuf_request(body):
 
 
 def serve(host="127.0.0.1", port=4318, receiver=None):
-    srv = ThreadingHTTPServer((host, port), make_handler(receiver or Receiver(local_sink)))
-    srv.daemon_threads = True
-    return srv
+    # loopback only: every exporter has the one address, so its limit is the overall one
+    return Server((host, port), make_handler(receiver or Receiver(local_sink)), max_per_ip=MAX_THREADS)
 
 
 def _ledger_runs(home):
