@@ -139,8 +139,9 @@ The effect is the drop in how often the call happens, with its 95% interval.
 
 ### Runs, overview and timeline (Causeway's)
 
-With why logs the header also has Causeway's views of a run; each takes panel 9, and the picker next to its title
-chooses the run.
+With why logs a run's page also has Causeway's views of a run, and the picker next to the view's title chooses the why
+run. A why run has that page even with no signed run selected: a why run on RUNS, a lineage step, **SHOW WHAT IT
+REACHED**, **WHY DID THIS HAPPEN?** and a why alert each open it.
 
 ![RUNS: every why run with its task, agents, model and tool calls, alerts, tests and whether its log is intact](viewer/runs-list.png)
 

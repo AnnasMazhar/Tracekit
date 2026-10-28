@@ -24,6 +24,17 @@ def needs_node(test):
         test.skipTest("needs node to run the page's code")
 
 
+def page_click():
+    """The page's click listener (an anonymous function) as `onClick`, brace-matched out of the page."""
+    i = PAGE.index('document.addEventListener("click", e => {\n      const t = e.target.closest("[data-wtab],') + len(
+        'document.addEventListener("click", ')
+    depth = 0
+    for k in range(PAGE.index("{", i), len(PAGE)):
+        depth += {"{": 1, "}": -1}.get(PAGE[k], 0)
+        if not depth:
+            return "const onClick = " + PAGE[i:k + 1] + ";\n"
+
+
 class Theme(unittest.TestCase):
     def test_every_colour_is_a_token_and_light_redefines_each_one(self):
         """A colour written outside the tokens stays dark in the light theme (the tape's row lines, the lanes)."""
@@ -1116,6 +1127,80 @@ class NothingLost(unittest.TestCase):
             process.stdout.write(JSON.stringify(seen));"""))
         self.assertEqual(out, [["run", "calls", "timeline"], "desk", False])
         self.assertIn('data-rv="calls">← THE RUN\'S CALLS</button>', PAGE)
+
+    # render() itself, its panels' renderers stubbed: the page and view it settles on, and the body classes that place
+    # the panels; a run with id r1, why logs with a why run w1
+    RENDER = ("""
+        const cls = new Set(), document = { body: { classList: { toggle: (c, on) => on ? cls.add(c) : cls.delete(c) } },
+          querySelectorAll: () => [] };
+        const el = {}, $ = id => el[id] ??= { hidden: false, textContent: "" };
+        """ + "".join(f"function {f}() {{}}\n" for f in (
+        "renderTop", "renderPages", "renderWaiting", "renderTicker", "renderNeeds", "renderRunHead", "renderRunsPage",
+        "renderApprovalsPage", "renderHorizon", "renderAgents", "renderTape", "renderAlerts", "renderMix", "renderLanes",
+        "renderWaterfall", "renderReason", "renderFiles", "renderWhyView", "renderNode", "renderWhyPanel", "renderDetail",
+        "renderReview", "syncLink")) + """
+        const W = { runs: [{ run_id: "w1" }], calls: {}, alerts: [{ run_id: "w1", node: "ev:5" }] };
+        const RUNS = new Map([["r1", { id: "r1", state: "open" }]]), CALL = { pre: { session_id: "r1" } };
+        let V2 = true, WHY = W, scope = null, PAGE = "desk", RV = "calls", CALLSLOG = false, VIEW = "desk", WTAB = "detail",
+          WNODE = null, WRUN = null, WPICK = null, wvKey = "", selected = null;
+        const setScope = id => { scope = id; }, schedule = () => {}, select = x => { selected = x; }, S = { actList: [] };
+        const GV = { focus: null }, whyAlerts = () => WHY.alerts, whyRef = a => a === CALL ? { run: "w1", node: "ev:5" } : null;
+        const shown = () => [PAGE, VIEW, [...cls].filter(c => /^(pg|rv)-/.test(c) || c === "callslog" && cls.has("pg-run")).sort().join(" ")];
+        """)
+    RENDERED = ["PAGES", "RVIEWS", "NEEDWHY", "show", "goLive", "centre", "render", "openWhy"]
+
+    def test_render_settles_each_page_and_run_view_with_and_without_a_run(self):
+        """render() turned a v2 run's page with no run into RUNS, the why views included, so every why link with no
+        signed run selected landed on RUNS (1.4.2 drew the why view)."""
+        needs_node(self)
+        out = json.loads(page_js(self.RENDERED, self.RENDER + """
+            const out = {};
+            for (const [mode, v2, sc, why] of [["v2, a run", true, "r1", W], ["v2, no run", true, null, W],
+                                               ["v2, no run, no why logs", true, null, null], ["why logs only", false, null, W]]) {
+              out[mode] = {};
+              for (const v of [...PAGES, ...RVIEWS, "timeline"]) {
+                V2 = v2; scope = sc; WHY = why; PAGE = "desk"; CALLSLOG = false; show(v); render(); out[mode][v] = shown();
+              }
+            }
+            process.stdout.write(JSON.stringify(out));"""))
+        pages = ["desk", "runs", "live", "approvals", "permissions", "horizon", "influence"]
+        views = {"overview": "overview", "calls": "desk", "waterfall": "desk", "graph": "graph", "why": "why",
+                 "agents": "agents", "evidence": "evidence", "timeline": "timeline"}
+
+        def want(v, run_page):
+            if v == "live":   # the newest open run
+                return ["run", "desk", "pg-run rv-calls"]
+            if v in pages:
+                return [v, v if v in ("permissions", "influence") else "desk", "pg-" + v]
+            if not run_page:
+                return ["runs", "desk", "pg-runs"]
+            return ["run", views[v], " ".join(sorted(["pg-run", "rv-" + ("calls" if v == "timeline" else v)]
+                                                     + (["callslog"] if v == "timeline" else [])))]
+        why_views = {"overview", "graph", "why", "agents", "timeline"}
+        for mode, run_page in (("v2, a run", lambda v: True), ("v2, no run", lambda v: v in why_views),
+                               ("v2, no run, no why logs", lambda v: False), ("why logs only", lambda v: True)):
+            for v in pages + list(views):
+                with self.subTest(mode=mode, view=v):
+                    self.assertEqual(out[mode][v], want(v, run_page(v)))
+
+    def test_each_why_link_opens_its_why_view_with_no_run_selected(self):
+        """From DESK with no signed run selected, a lineage step, SHOW WHAT IT REACHED, WHY DID THIS HAPPEN?, a row of
+        RUNS' why runs and a why alert each went to RUNS."""
+        needs_node(self)
+        out = json.loads(page_js(self.RENDERED, self.RENDER + page_click() + """
+            const out = [];
+            for (const [link, ds] of [["lineage step", { wnode: "ev:2" }], ["SHOW WHAT IT REACHED", { wreach: "ev:2", wr: "w1" }],
+                                      ["WHY DID THIS HAPPEN?", { wwhy: "ev:5", wr: "w1" }], ["why run on RUNS", { wgo: "w1" }],
+                                      ["why alert", { wal: "0" }]]) {
+              PAGE = "desk"; VIEW = "desk"; WRUN = null; WNODE = null; WTAB = "why"; selected = CALL; GV.focus = null;
+              onClick({ target: { closest: () => ({ dataset: ds, closest: () => null }) }, preventDefault() {} });
+              render(); out.push([link, PAGE, VIEW, WRUN]);
+            }
+            process.stdout.write(JSON.stringify(out));"""))
+        self.assertEqual(out, [["lineage step", "run", "graph", "w1"], ["SHOW WHAT IT REACHED", "run", "graph", "w1"],
+                               ["WHY DID THIS HAPPEN?", "run", "why", "w1"], ["why run on RUNS", "run", "overview", "w1"],
+                               ["why alert", "run", "why", "w1"]])
+
 
     def test_each_page_places_the_panels_it_had(self):
         css = PAGE[PAGE.index("<style>"):PAGE.index("</style>")]

@@ -3170,16 +3170,19 @@
     function nowTs() { return mode === "live" ? Date.now() / 1000 : (S.lastTs || Date.now() / 1000); }
 
     function render() {
-      if (PAGE === "run" && V2 && !scope) PAGE = "runs";   // a run's page with no run: the list to pick one from
+      // a run's page with no run: the list to pick one from, unless it shows a why log's view (a why link, a why run
+      // of RUNS: WRUN, or the first why run)
+      if (PAGE === "run" && V2 && !scope && !(WHY && NEEDWHY.has(centre()))) PAGE = "runs";
       VIEW = centre();
       for (const p of [...PAGES, "run"]) document.body.classList.toggle("pg-" + p, PAGE === p);
       for (const v of RVIEWS) document.body.classList.toggle("rv-" + v, PAGE === "run" && RV === v);
       document.body.classList.toggle("callslog", CALLSLOG);
-      renderTop(); renderPages(); renderWaiting(); renderTicker(); renderNeeds(); renderRunHead(); renderRunsPage(); renderApprovalsPage(); renderHorizon();
+      renderTop(); renderPages(); renderWaiting(); renderTicker(); renderNeeds(); renderRunsPage(); renderApprovalsPage(); renderHorizon();
       renderAgents(); renderTape(); renderAlerts(); renderMix(); renderLanes(); renderWaterfall(); renderReason(); renderFiles();
       if (WTAB === "node" && !WNODE) WTAB = "detail";
       document.body.classList.toggle("wd", WTAB !== "detail");   // before the graph, which scrolls its node into view
       renderWhyView();
+      renderRunHead();   // after the why view, which picks WRUN when none is
       $("wtabnode").hidden = !WNODE;
       document.querySelectorAll(".p>h2 [data-wtab]").forEach(b => b.classList.toggle("on", b.dataset.wtab === WTAB));
       if (WTAB === "node") renderNode(); else if (WTAB === "why") renderWhyPanel(); else if (selected) renderDetail(selected); else if (V2) renderReview();
