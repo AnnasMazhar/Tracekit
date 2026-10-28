@@ -350,6 +350,17 @@ class CodingPack(unittest.TestCase):
             'valkey-cli FLUSHALL',
             'valkey-cli -h cache.internal FLUSHDB',
             'echo FLUSHDB | valkey-cli -h cache.internal',
+            # a flush through command, builtin or env, by path, in a group, as a herestring or in a heredoc
+            'command echo FLUSHALL | redis-cli',
+            'env echo FLUSHDB | redis-cli -h cache.internal',
+            'builtin echo FLUSHALL | command redis-cli',
+            '/bin/echo FLUSHALL | /usr/local/bin/redis-cli',
+            '(echo FLUSHALL) | redis-cli',
+            '{ echo FLUSHALL; } | valkey-cli',
+            'redis-cli <<< FLUSHALL',
+            "redis-cli -h cache.internal -n 2 <<< 'FLUSHDB ASYNC'",
+            "redis-cli <<< $'FLUSHALL\\n'",
+            "redis-cli -h cache.internal <<'EOF'\nSELECT 2\nFLUSHDB\nEOF",
             'psql -c "SELECT 1;\\nDROP TABLE users"',
             'psql -e -c "BEGIN; DELETE FROM users; ROLLBACK;"',
             # the \G gap: mysql/mariadb end the statement at \G, so the ROLLBACK never undoes the DELETE
@@ -375,6 +386,12 @@ class CodingPack(unittest.TestCase):
             # listed, not covered: the SQL never reaches argv
             'cat drop.sql | psql -h db.internal',
             'psql <<EOF\nDROP TABLE users\nEOF',
+            # a flush word that is a key, a value redis-cli -x stores, a sentence or a herestring a command ignores
+            "redis-cli <<< 'GET flushall'",
+            'redis-cli -x SET note <<< FLUSHALL',
+            "redis-cli <<< 'FLUSHALL is a dangerous command'",
+            'redis-cli -n 2 GET k <<< FLUSHALL',
+            'redis-cli <<EOF\nGET flushall\nEOF',
         ]
         held_mcp = [
             ("mcp__postgres__query", {"query": "DROP TABLE users", "sql": "BEGIN; SELECT 1; ROLLBACK;"}),
