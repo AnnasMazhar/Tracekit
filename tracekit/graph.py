@@ -90,8 +90,15 @@ def _graph_data(e: Dict[str, Any]) -> None:
         if isinstance(d.get("agent"), dict):
             string(d["agent"].get("name"), "agent.name")
         string(d.get("analyzes"), "analyzes")
+        string(d.get("replay_of"), "replay_of")
     elif t == "run.child":
         string(d.get("run_id"), "run_id")
+    elif t == "why.finding":
+        for k in ("replay_runs", "uncounted"):   # the replay runs it names (_named_runs)
+            arms = d.get(k)
+            if arms is not None and (not isinstance(arms, list) or not all(
+                    isinstance(x, dict) and isinstance(x.get("run_id"), str) for x in arms)):
+                raise ValueError(f"why.finding data.{k} must be a list of objects with a string run_id")
     elif t == "policy.decision":
         strings(d.get("rule_ids"), "rule_ids")
         if not isinstance(d.get("decision_id"), str):   # its call's identity (_calls): the signer writes one always
@@ -272,9 +279,14 @@ def _about(recs: List[Dict[str, Any]]) -> Optional[str]:
 
 
 def _named_runs(recs: List[Dict[str, Any]]) -> List[str]:
-    """The run ids one run's records name: its own, the run it analyses and its child runs, all of its tenant."""
+    """The run ids one run's records name: its own, the run it analyses or replays, its child runs and its why tests'
+    replay runs, all of its tenant."""
+    first = recs[0]["event"]
+    replays = (first.get("data") or {}).get("replay_of") if first["type"] == "run.registered" else None
     children = [(r["event"].get("data") or {}).get("run_id") for r in recs if r["event"]["type"] == "run.child"]
-    return [x for x in [recs[0]["event"]["run_id"], _about(recs), *children] if x]
+    arms = [x["run_id"] for r in recs if r["event"]["type"] == "why.finding"
+            for k in ("replay_runs", "uncounted") for x in (r["event"].get("data") or {}).get(k) or ()]
+    return [x for x in [first["run_id"], _about(recs), replays, *children, *arms] if x]
 
 
 def _qualified(recs: List[Dict[str, Any]], shared: set) -> List[Dict[str, Any]]:
@@ -290,10 +302,13 @@ def _qualified(recs: List[Dict[str, Any]], shared: set) -> List[Dict[str, Any]]:
     for r in recs:
         e = dict(r["event"], run_id=name(r["event"]["run_id"]))
         d = e.get("data") or {}
-        if e["type"] == "run.registered" and d.get("analyzes"):
-            e["data"] = dict(d, analyzes=name(d["analyzes"]))
+        if e["type"] == "run.registered" and (d.get("analyzes") or d.get("replay_of")):
+            e["data"] = dict(d, **{k: name(d[k]) for k in ("analyzes", "replay_of") if d.get(k)})
         elif e["type"] == "run.child" and d.get("run_id"):
             e["data"] = dict(d, run_id=name(d["run_id"]))
+        elif e["type"] == "why.finding":   # _counted finds its replay runs by these ids
+            e["data"] = dict(d, **{k: [dict(x, run_id=name(x["run_id"])) for x in d[k]]
+                                   for k in ("replay_runs", "uncounted") if d.get(k)})
         out.append(dict(r, event=e))
     return out
 
@@ -326,8 +341,8 @@ def _host(args: Any) -> Optional[str]:
 
 
 def _args_digest(args: Any) -> str:
-    """The opened arguments behind a call-target edge, as build compares them (_supersede); never written out: unsalted,
-    it would test guesses of what the bundle's salted commitment hides."""
+    """The opened arguments of a call, as build compares them (_calls, _supersede); never written out: unsalted, it
+    would test guesses of what the bundle's salted commitment hides."""
     return hashlib.sha256(json.dumps(args, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 

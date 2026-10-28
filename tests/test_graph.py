@@ -236,6 +236,7 @@ class CallOutcomes(unittest.TestCase):
                 14: {"file_path": flaky, "content": "y"}, 16: {"file_path": flaky, "content": "y"}}
         g = Graph(None, "grade")
         graph._add_run(g, records, True, args)
+        graph._supersede(g)
         doc = {"schema_version": graph.SCHEMA_VERSION, "tracekit": "test", "content": True, "graphify": None,
                "sources": [], "nodes": list(g.nodes.values()), "edges": g.edges}
         sections = {s["id"]: s["items"] for s in graph.highlights(doc)["sections"]}
@@ -370,6 +371,8 @@ class ReviewRegressions(unittest.TestCase):
     def test_malformed_nested_event_makes_its_source_unreadable(self):
         bads = [rec(0, typ, data, "bad") for typ, data in (
             ("run.registered", {"agent": "not an object"}),
+            ("run.registered", {"replay_of": ["not", "a", "key"]}),
+            ("why.finding", {"replay_runs": "not a list"}),
             ("tool.result", {"decision_id": ["not", "a", "key"]}),
             ("policy.decision", {"decision_id": "d", "provenance": [{"source": {"run_seq": [1]}}]}),
             ("review", {"cites": [{"run_seq": [1]}]}))]
@@ -963,6 +966,24 @@ class EndToEnd(unittest.TestCase):
         [test] = [n for n in counted["nodes"] if n["label"].startswith("why test:")]
         self.assertEqual((test["label"].endswith(": causal (self-asserted)"), test["author"]), (True, "self-asserted"))
 
+    def test_a_why_test_about_a_run_another_tenant_has_the_id_of_is_counted_on_its_own_run(self):
+        """The mail run's id is also another tenant's run: its findings and replay runs, which name it by its id alone,
+        still count the why test, drawn on the default tenant's run only."""
+        real = graph._read
+
+        def read(path, trust, *data):   # other.tkb: the mail run's records as globex's run of the same id
+            if path != "other.tkb":
+                return real(path, trust, *data)
+            src, runs = real(self.mail_tkb, trust)
+            return dict(src, name=path), {self.mail: [dict(r, event=dict(r["event"], tenant="globex"))
+                                                      for r in runs[self.mail]]}
+        with mock.patch.object(graph, "_read", side_effect=read):
+            doc = graph.build([self.found_tkb, "other.tkb"], self.trust)
+        [mine] = [n["id"][4:] for n in doc["nodes"] if n["id"].startswith(f"run:{self.mail}@default@")]
+        [edge] = self.edges(doc, kind="causal (tested)")
+        self.assertEqual((edge["src"].startswith(f"input:{mine}:"), edge["dst"], edge["author"]),
+                         (True, self.call(mine, "send_email", doc), "self-asserted"))
+
     def test_a_tampered_bundle_is_unverified_never_dropped(self):
         self.assertIn("UNVERIFIED (failed verification): bad.tkb", self.said)
         bad = next(s for s in self.doc["sources"] if s["name"] == "bad.tkb")
@@ -1217,7 +1238,8 @@ class EndToEnd(unittest.TestCase):
             self.assertEqual([d for d in digests if d in text], [], name)
         with open(os.path.join(out, graph.GRAPH)) as f:
             doc = json.load(f)
-        call, target = f"call:{r.run_id}:w1", "file:" + args["file_path"]
+        [call] = [n["id"] for n in doc["nodes"] if n["id"].startswith(f"call:{r.run_id}:") and n["tool_use_id"] == "w1"]
+        target = "file:" + args["file_path"]
         [asked] = self.edges(doc, src=call, dst=target, kind="asked to write")
         [ran] = self.edges(doc, src=call, dst=target, kind="reported writing")
         self.assertEqual(asked["superseded_by"], ran["record"])

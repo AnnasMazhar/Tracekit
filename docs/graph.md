@@ -79,7 +79,9 @@ verifier joins them. A decision made again under the same tool call id and attem
 the signer's one approval of a call attempt covers both. Without `--content` each decision is a call of its own.
 
 A run id is unique only within one tenant of one signer log. When runs of other tenants or logs in the graph have the
-same id, each of those runs is `RUN_ID@TENANT@LOG_ID` instead of `RUN_ID`, in node ids, labels and edge records.
+same id, each of those runs is `RUN_ID@TENANT@LOG_ID` instead of `RUN_ID`, in node ids, labels and edge records, and
+wherever a record of its tenant and log names it (a findings run's `analyzes`, a replay run's `replay_of`, a why test's
+replay runs), so a why test about it is counted with its own tenant's runs.
 
 ### Edges and grades
 
@@ -114,8 +116,10 @@ edges have `observer`.
 
 An `asked to write` or `asked to reach` edge remains in `graph.json`. Queries and reports hide it only when its
 `superseded_by` names the record of a later outcome from the same call to the same target, at the same grade: build
-found that call's decided arguments the same. It is not, by itself, a failed attempt. `graph.json` holds no digest of
-the arguments: an unsalted one would let anyone test guesses of what the bundle's salted commitment hides.
+found that call's decided arguments the same (a decision made again, above, or a later export of the run). A new
+attempt is a call of its own, so its outcome hides no earlier attempt's ask. It is not, by itself, a failed attempt.
+`graph.json` holds no digest of the arguments: an unsalted one would let anyone test guesses of what the bundle's
+salted commitment hides.
 
 A signed why test (`why.finding`) is drawn as `causal (tested)` or `suppressive (tested)` only when the verifier counts
 it: build runs the verifier's findings check over the analysed run with its findings and replay runs from the verified
