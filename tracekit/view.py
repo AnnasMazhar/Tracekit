@@ -1424,21 +1424,23 @@ class Runs:
         i, tenant, run_id = key
         if not self.verifying.acquire(blocking=False):
             raise observe.Busy()
-        fd, out = tempfile.mkstemp(suffix=".tkb", dir=self.tmp)
-        os.close(fd)
         try:
-            r, note = self._open(i)
+            fd, out = tempfile.mkstemp(suffix=".tkb", dir=self.tmp)
+            os.close(fd)
             try:
-                run = r.runs.get((tenant, run_id))
-                if run is None or not note or run["seqs"][-1] >= note[0]:
-                    return None
-                export(r, tenant, run_id, note[1], out)
-                with open(out, "rb") as f:
-                    return f.read()
+                r, note = self._open(i)
+                try:
+                    run = r.runs.get((tenant, run_id))
+                    if run is None or not note or run["seqs"][-1] >= note[0]:
+                        return None
+                    export(r, tenant, run_id, note[1], out)
+                    with open(out, "rb") as f:
+                        return f.read()
+                finally:
+                    r.close()
             finally:
-                r.close()
+                os.unlink(out)
         finally:
-            os.unlink(out)
             self.verifying.release()
 
 

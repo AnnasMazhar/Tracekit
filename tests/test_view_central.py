@@ -244,6 +244,18 @@ class CentralViewer(unittest.TestCase):
         runs.verifying.release()
         self.assertEqual(self.get(a1, self.acme, port)[0], 200)
 
+    def test_a_bundle_whose_temp_file_fails_gives_its_slot_back(self):
+        """The bundle's temp file was made after the check slot was taken and before the try that gives it back: two
+        failures (a full disk, no file descriptors) left /api/run and /api/bundle answering 503 until a restart."""
+        runs = view.Runs(self.files)
+        port = self.serve(runs)
+        a1 = f"log=0&tenant=acme&run={self.ids['a1']}"
+        with mock.patch.object(view.tempfile, "mkstemp", side_effect=OSError(28, "No space left on device")):
+            for _ in range(2):
+                self.assertEqual(self.get(f"/api/bundle?{a1}", self.acme, port)[0], 502)
+        self.assertEqual((self.get(f"/api/bundle?{a1}", self.acme, port)[0], self.get(f"/api/run?{a1}", self.acme, port)[0]),
+                         (200, 200))
+
     def test_downloaded_bundle_verifies_offline(self):
         status, r, data = self.get(f"/api/bundle?log=0&tenant=acme&run={self.ids['a1']}", self.acme)
         self.assertEqual(status, 200)
