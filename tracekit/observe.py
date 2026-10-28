@@ -31,7 +31,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .core import event_hash, read_text
 from .ledger import read_records, verify_record_sig
-from .netserver import MAX_STREAMS, MAX_THREADS, Server, body_length, drain, read_body
+from .netserver import MAX_STREAMS, MAX_THREADS, Lines, Server, body_length, drain, read_body
 from .replay import CSP_META
 from .storage.base import StorageCorrupt, StorageUnavailable
 from .why.core import ts_seconds
@@ -418,7 +418,7 @@ def make_handler(feed, token, allowed_hosts=None, secure=False, login=None, appr
         return '<nav class="nav">' + "".join(f'<a href="{p}" class="{"on" if p == here else ""}">{names[p]}</a>'
                                              for p in pages) + "</nav>"
 
-    class Handler(BaseHTTPRequestHandler):
+    class Handler(Lines, BaseHTTPRequestHandler):
         server_version = "tracekit-observe"
         session_key = secrets.token_bytes(32)   # this server's: its session cookies die with it
 

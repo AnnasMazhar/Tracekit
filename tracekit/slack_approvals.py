@@ -36,7 +36,7 @@ from http.server import BaseHTTPRequestHandler
 
 from tracekit import yamlmini
 from tracekit.client import no_redirect_opener
-from tracekit.netserver import Server, body_length, read_body
+from tracekit.netserver import Lines, Server, body_length, read_body
 from tracekit.signer.metrics import _loopback
 from tracekit.signer.rpc_schema import RPCError
 
@@ -231,7 +231,7 @@ class Bridge:
 
 
 def make_handler(bridge):
-    class Handler(BaseHTTPRequestHandler):
+    class Handler(Lines, BaseHTTPRequestHandler):
         def do_POST(self):
             if self.path != PATH:
                 return self.answer(404)

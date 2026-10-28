@@ -70,14 +70,37 @@ def no_logs():
     return runs
 
 
-def handler_classes():
-    """'path:Class' of every class in tracekit/ that derives, directly or through another, from BaseHTTPRequestHandler."""
+def source_trees():
+    """{'tracekit/...py': its AST} for every module in tracekit/."""
     trees = {}
     for d, _, files in os.walk(os.path.join(ROOT, "tracekit")):
         for f in files:
             if f.endswith(".py"):
                 with open(os.path.join(d, f), encoding="utf-8") as fh:
                     trees[os.path.relpath(os.path.join(d, f), ROOT).replace(os.sep, "/")] = ast.parse(fh.read())
+    return trees
+
+
+def has_lines(trees, rel, name):
+    """Whether class `name` of module `rel` derives from netserver.Lines: through a base class defined in the same
+    module, or one imported by name from another module of tracekit/."""
+    tree = trees[rel]
+    classes = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
+    for base in (getattr(b, "id", None) for b in classes[name].bases):
+        if base == "Lines" or base in classes and base != name and has_lines(trees, rel, base):
+            return True
+        for imp in ast.walk(tree):
+            if isinstance(imp, ast.ImportFrom) and base in {a.name for a in imp.names}:
+                parts = (rel.split("/")[:-imp.level] if imp.level else []) + (imp.module or "").split(".")
+                other = "/".join(parts) + ".py"
+                if other in trees and has_lines(trees, other, base):
+                    return True
+    return False
+
+
+def handler_classes():
+    """'path:Class' of every class in tracekit/ that derives, directly or through another, from BaseHTTPRequestHandler."""
+    trees = source_trees()
     names, found = {"BaseHTTPRequestHandler"}, set()
     while True:
         before = len(found)
@@ -126,6 +149,11 @@ class Checklist(unittest.TestCase):
     def test_every_http_handler_is_listed(self):
         self.assertEqual(handler_classes(), set(SURFACES),
                          "a new HTTP handler goes into SURFACES, the probes below and docs/security-checklist.md")
+
+    def test_every_http_handler_reads_its_raw_header_lines(self):
+        """netserver.Lines refuses a CR that doesn't end its header line, which Python's parser takes as a line end."""
+        trees = source_trees()
+        self.assertEqual({key for key in SURFACES if not has_lines(trees, *key.split(":"))}, set())
 
     def test_checklist_lists_every_surface_and_names_tests_that_exist(self):
         with open(DOC, encoding="utf-8") as f:

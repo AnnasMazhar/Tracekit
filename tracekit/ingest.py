@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler
 
 from . import client
 from .core import now_ts
-from .netserver import Server, body_length, read_body
+from .netserver import Lines, Server, body_length, read_body
 from .wiki import wiki_url
 
 TOKENS_FILE = "ingest-tokens.json"
@@ -175,7 +175,7 @@ def make_handler(home, forward=None):
     receivers = {}
     receivers_lock = threading.Lock()
 
-    class H(BaseHTTPRequestHandler):
+    class H(Lines, BaseHTTPRequestHandler):
         server_version = "tracekit-ingest"
 
         def log_message(self, *a):

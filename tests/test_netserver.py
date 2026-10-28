@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+import requests  # noqa: E402
 from cryptography import x509  # noqa: E402
 from cryptography.hazmat.primitives import hashes, serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
@@ -50,9 +51,16 @@ def self_signed(d):
 
 
 class RefusedBody(unittest.TestCase):
-    def test_a_message_content_type_is_framed_by_its_content_length(self):
-        headers = http.client.parse_headers(io.BytesIO(b"Content-Type: message/rfc822\r\nContent-Length: 2\r\n\r\n"))
-        self.assertEqual(netserver.body_length(headers), (2, None))
+    def test_a_message_or_multipart_content_type_is_framed_by_its_content_length(self):
+        """The header parser also parses a body of these types, and records defects of that body (no boundary), which
+        aren't the headers'."""
+        upload = requests.Request("POST", "http://x/v1/files", files={"file": ("a.txt", b"hi")}).prepare()
+        for content_type in ("message/rfc822", upload.headers["Content-Type"], "multipart/form-data",
+                             "multipart/mixed; boundary=b"):
+            with self.subTest(content_type):
+                headers = http.client.parse_headers(io.BytesIO(
+                    f"Content-Type: {content_type}\r\nContent-Length: 2\r\n\r\n".encode()))
+                self.assertEqual(netserver.body_length(headers), (2, None))
 
     def test_a_refused_post_with_an_unread_body_still_gets_its_answer(self):
         """A handler that answers without reading the body (an auth failure) must not reset the connection under the

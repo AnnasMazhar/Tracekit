@@ -36,7 +36,7 @@ from tracekit import crypto, merkle
 from tracekit.public_witness import ORIGIN, ORIGIN_FORMAT
 from tracekit.deploy import files
 from tracekit.format import checkpoint
-from tracekit.netserver import MAX_PER_IP, MAX_THREADS, Server, body_length, read_body
+from tracekit.netserver import MAX_PER_IP, MAX_THREADS, Lines, Server, body_length, read_body
 from tracekit.tlog_witness import MAX_BODY
 from tracekit.wiki import wiki_url
 
@@ -214,7 +214,7 @@ def make_handler(witness, proxied=False):
     capped per forwarded client here instead (MAX_PER_IP)."""
     active, active_lock = {}, threading.Lock()
 
-    class H(BaseHTTPRequestHandler):
+    class H(Lines, BaseHTTPRequestHandler):
         server_version = "tracekit-public-witness"
 
         def log_message(self, *a):

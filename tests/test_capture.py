@@ -23,6 +23,7 @@ import urllib.request
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import requests  # noqa: E402
 from tracekit import bundle, install, peercred, policy, privacy, yamlmini  # noqa: E402
 from tracekit.core import read_json, read_text, write_json  # noqa: E402
 from factories import make_signer, wait_for  # noqa: E402
@@ -397,6 +398,14 @@ class ProxyStack(Stack):
 
 
 class Proxy(ProxyStack):
+    def test_a_multipart_upload_is_forwarded(self):
+        """A Files API upload: multipart/form-data, whose empty-bodied header block the parser records defects for."""
+        with requests.Session() as s:
+            s.trust_env = False
+            r = s.post(f"http://127.0.0.1:{self.px_port}/v1/files", files={"file": ("a.txt", b"hi")}, timeout=30,
+                       headers={"x-api-key": "sk-ant-secretsecretsecret00"})
+        self.assertEqual(r.status_code, 200)
+
     def test_oversized_request_body_is_rejected(self):
         from tracekit.proxy import MAX_REQUEST_SIZE
         with socket.create_connection(("127.0.0.1", self.px_port), timeout=3) as conn:

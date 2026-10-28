@@ -65,7 +65,7 @@ import urllib.parse
 import uuid
 
 from tracekit import yamlmini
-from tracekit.netserver import body_length
+from tracekit.netserver import Lines, body_length
 from tracekit.proxy import HOP
 from tracekit.sdk.client import Client, SignerUnavailable
 from tracekit.signer.rpc_schema import RPCError
@@ -338,7 +338,7 @@ def _relay(a, b, count):
             count(len(data), 0) if s is a else count(0, len(data))
 
 
-class _Handler(http.server.BaseHTTPRequestHandler):
+class _Handler(Lines, http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     rbufsize = 0   # unbuffered: after the headers, the tunnel's bytes are read from the socket itself
 

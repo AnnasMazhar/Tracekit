@@ -32,7 +32,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import crypto, merkle
 from .merkle import tiles
-from .netserver import Server, body_length, read_body
+from .netserver import Lines, Server, body_length, read_body
 from .core import b64d, b64e, canon, now_ts
 from .locking import lock_file
 from .witness import CP_TYPE, verify_checkpoint
@@ -201,7 +201,7 @@ def add_token(home, name, signer_pub):
 
 
 def make_handler(log):
-    class H(BaseHTTPRequestHandler):
+    class H(Lines, BaseHTTPRequestHandler):
         server_version = "tracekit-witness"
 
         def log_message(self, *a):

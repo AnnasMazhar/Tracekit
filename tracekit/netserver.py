@@ -48,6 +48,12 @@ def drain(sock):
         pass
 
 
+# the defects of a header line; the parser also records defects of the body a multipart/* type says follows (no
+# boundary), which no header line has
+HEADER_DEFECTS = (errors.InvalidHeaderDefect, errors.MissingHeaderBodySeparatorDefect,
+                  errors.FirstHeaderLineIsContinuationDefect, errors.MisplacedEnvelopeHeaderDefect)
+
+
 def body_length(headers, digits=12):
     """(n, None): the request's body is the n bytes its one Content-Length says (n None: it declares none). (None, why):
     its framing is refused, with the connection closed. Every server here reads a body by Content-Length only; a proxy
@@ -55,7 +61,8 @@ def body_length(headers, digits=12):
     dropped together with every one after it, folded into the one before it, or split at a bare CR: Lines)
     would forward the bytes past it as another request. A value is ASCII digits only: int() also takes `+1`, `1_0`
     and other scripts' digits, and raises past 4,300 of them."""
-    if headers.defects or any("\r" in v or "\n" in v for v in headers.values()):
+    if any(isinstance(d, HEADER_DEFECTS) for d in headers.defects) or any(
+            "\r" in v or "\n" in v for v in headers.values()):
         return None, "a malformed header line"
     if "transfer-encoding" in headers:
         return None, "Transfer-Encoding isn't supported: send the body with Content-Length"
