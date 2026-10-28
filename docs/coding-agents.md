@@ -121,8 +121,8 @@ At each prompt (`UserPromptSubmit`; Cursor's `beforeSubmitPrompt`, Gemini CLI's 
 what the person typed (`input.observed`, trusted, source `<agent>:UserPromptSubmit`: `claude-code`, `codex`, `cursor`,
 `gemini-cli`, `qwen-code` or `droid`; its text in the content vault). Text the harness added to the prompt is recorded apart, as untrusted
 input under its own source, so a value in it keeps its provenance: in Claude Code a paste block, a skill's body, a
-message from another session, agent or teammate, a task or system notification, a scheduled task, uploads and command
-output (`claude-code:paste`, `claude-code:task-notification`, ...); in Gemini CLI its referenced files block
+message from another session, agent, teammate, plugin, observer or channel, a task or system notification, a scheduled
+task, uploads and command output (`claude-code:paste`, `claude-code:task-notification`, ...); in Gemini CLI its referenced files block
 (`gemini-cli:referenced-file`). A whole Claude Code turn its payload says no person typed (a `source` other than `user`
 or `sdk`: a plugin's prompt, a notice, a wake-up or a poll event) is recorded that way too (`claude-code:poll_event`,
 ...), and none of its constraints are live. `tracekit analyze --v2` takes a prompt line of the transcript as the person's only when

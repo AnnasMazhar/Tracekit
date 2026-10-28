@@ -465,11 +465,13 @@ def _wrapped(agent):
             r'|<pasted_content\b'
             r'|\[SYSTEM NOTIFICATION - NOT USER INPUT\]'
             r'|\[SCHEDULED TASK - AUTOMATED FIRING OF A CONFIGURED PROMPT\]'
-            r'|(?:(?:Another Claude session|A peer session|The coordinator) sent a message'
-            r'(?: while you were working)?:\s*)?'
+            r'|\[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT\]'
+            r'|(?:(?:(?:Another Claude session|A peer session|The coordinator) sent a message'
+            r'|A message arrived from \S{1,64})(?: while you were working)?:\s*)?'
             rf'<({tags})[\s>]'
-            r'|(?:Another Claude session|A peer session|The coordinator) sent a message'
+            r'|(?:Another Claude session|A peer session|The coordinator|The \S{1,64} plugin) sent a message'
             r'(?: while you were working)?:'
+            r'|Your background observer \([\w:-]{0,64}\) sent a report(?: while you were working)?:'
             r'|Base directory for this skill:', re.IGNORECASE | re.ASCII)
     if agent == "gemini-cli":
         return re.compile(r'--- Content from referenced files ---')
@@ -504,8 +506,14 @@ def prompt_parts(prompt, agent=None):
             source = "skill"
         elif agent == "gemini-cli":
             source = "referenced-file"
+        elif "plugin sent a message" in match.group(0).lower():
+            source = "plugin-message"
         elif "sent a message" in match.group(0).lower():
             source = "peer-message"
+        elif match.group(0).lower().startswith("your background observer"):
+            source = "observer-report"
+        elif match.group(0).lower().startswith("[message from"):
+            source = "non-user-message"
         else:
             source = "scheduled-task" if match.group(0).lower().startswith("[scheduled") else "system-notification"
         parts.append((source, prompt[start:], start))

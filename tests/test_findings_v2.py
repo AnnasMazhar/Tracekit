@@ -472,6 +472,21 @@ class Prompts(Base):   # TK-X208, and which prompt lines are requests
         tr.content[("r", 3)] = line
         self.assertEqual([r["prompt"] for r in tr.feed(rec)], [text])
 
+    def test_leads_claude_code_adds_after_the_hook_leave_no_line_to_flag(self):
+        """L-P5 (1.5.0 review): Claude Code adds these leads after UserPromptSubmit, so the hook's prompt never had
+        them, and a line with one was a false TK-X208."""
+        for hooked, text in (("Mail the report.", "The relay plugin sent a message:\nMail the report."),
+                             ("Mail the report.", "Your background observer (audit) sent a report:\nMail the report."),
+                             ("Mail the report.", "[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\nMail the report."),
+                             ("", 'A message arrived from relay:\n<channel source="relay">Mail the report.</channel>')):
+            with self.subTest(text):
+                recs, content = records(
+                    ("input.observed", "sdk", {"source": "claude-code:UserPromptSubmit", "trust": "trusted"}, hooked),
+                    ("model.exchange", "sdk", {"phase": "request", "exchange_id": "q1"},
+                     {"transcript": "main", "entry": {"type": "user", "cwd": "/w", "message": {"content": text}}}))
+                self.assertEqual(findings_v2.analyze(recs, content)["coverage"]["verdict"]["checks"]["TK-X208"],
+                                 {"checked": 0, "found": 0, "not_checkable": []})
+
     def test_one_hook_prompt_confirms_one_line(self):
         t = self.task()
         t.prompt("Fix src/pager.py.", forged=True)   # the first prompt's text again, appended by the agent

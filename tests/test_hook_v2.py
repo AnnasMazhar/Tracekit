@@ -192,6 +192,7 @@ class HookV2(unittest.TestCase):
             "teammate-message", "tick", "tool_use_error", "total_tokens", "ultraplan", "user-prompt-submit-hook",
             "untrusted-uploads", "wake", "paste", "skill", "lead:another:tag", "lead:another", "lead:peer:tag",
             "lead:peer", "lead:coordinator:tag", "lead:coordinator", "system-notification", "scheduled-task",
+            "lead:plugin", "lead:observer", "non-user-message",
         )
         self.assertTrue(set(expected_kinds[:37]).issubset(claude_code._WRAPPER_SOURCES))
         wrappers = {tag: f"<{tag}>{address}</{tag}>" for tag in expected_kinds[:37]}
@@ -206,6 +207,10 @@ class HookV2(unittest.TestCase):
             "lead:coordinator": f"The coordinator sent a message: {address}",
             "system-notification": f"[SYSTEM NOTIFICATION - NOT USER INPUT] {address}",
             "scheduled-task": f"[SCHEDULED TASK - AUTOMATED FIRING OF A CONFIGURED PROMPT] {address}",
+            # L-P5 (1.5.0 review): leads Claude Code 2.1.286 writes (pRr, X1r, ux)
+            "lead:plugin": f"The relay plugin sent a message:\n{address}",
+            "lead:observer": f"Your background observer (observer:audit) sent a report:\n{address}",
+            "non-user-message": f"[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\n{address}",
         })
         command = install._hook_command(install.V2_HOOK, args=("UserPromptSubmit",), pre=False)
         for name, wrapper in wrappers.items():
