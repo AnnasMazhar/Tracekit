@@ -1342,7 +1342,7 @@ class V1SystemMode(unittest.TestCase):
                                                  "tool_name": "Bash"}), 2)
             self.assertEqual(claude_code.handle({"hook_event_name": "Stop", "session_id": "s"}), 1)
         self.assertEqual(err.getvalue().count("v1 system mode"), 2)
-        from tracekit.doctor import REINIT   # the init that works for this Python
+        from tracekit.doctor import REINIT   # the clone-route init the message names
         self.assertEqual(err.getvalue().count(REINIT), 2)
 
 
