@@ -141,7 +141,10 @@ class Surfaces(unittest.TestCase):
                                                                          runs=no_logs(), why=why))
         auth = {"Authorization": f"Bearer {SECRET}"}
         operator = _session(srv.RequestHandlerClass.session_key, int(time.time()) + 60)   # the token's session
-        return srv, SECRET, [("GET", f"/nope?token={SECRET}", {}, 401), ("GET", "/nope", auth, 404),
+        login._keep("admin", {"tenant": observe.ALL, "role": "operator-admin", "person": {}, "csrf": "c",
+                              "at": time.time(), "until": time.time() + 60})   # every tenant's records, no why logs
+        admin = {"Cookie": f"{observe.COOKIE}=admin", "Content-Type": "application/json"}
+        return srv, SECRET, [("GET", "/api/why/workspace", admin, 403), ("POST", "/api/why/runs/x/tests", admin, 401),("GET", f"/nope?token={SECRET}", {}, 401), ("GET", "/nope", auth, 404),
                              ("GET", "/runs", {}, 401), ("GET", f"/api/runs?run={SECRET}", {}, 401),
                              ("GET", f"/api/runs?limit={BIG}", auth, 400), ("GET", f"/api/runs?{SECRET}=1", auth, 400),
                              ("GET", f"/api/run?log=0&tenant=t&run={SECRET}", auth, 400),
