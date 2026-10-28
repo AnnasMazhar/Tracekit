@@ -1189,6 +1189,19 @@ class Classes(unittest.TestCase):
             with self.subTest(url=url):
                 self.assertFalse(classes.url_info(url)["internal"])
 
+    def test_invisible_characters_in_a_host_are_dropped_as_a_url_parser_drops_them(self):
+        """A browser's or Node's URL parser drops a soft hyphen, a zero-width space or joiner, a word joiner, a
+        byte-order mark or a tag character in a host (also percent-encoded); the signer kept them, so
+        http://127.0.0<soft hyphen>.1/ was no address and only flagged. They are dropped before the host is read."""
+        for ch in ("­", "​", "‍", "⁠", "﻿", "%C2%AD", "%E2%80%8B", "\U000e0041", "᠎"):
+            for url in ("http://127.0.0" + ch + ".1/", "http://127.0.0.1" + ch + "/", "http://169.254.169.254" + ch + "/"):
+                with self.subTest(url=url):
+                    self.assertTrue(classes.url_info(url)["internal"])
+                    self.assertIn(classes.url_target(url), ("http://127.0.0.1/", "http://169.254.169.254/"))
+        self.assertEqual(classes.url_info("https://exam­ple.com/"), {"scheme": "https", "host": "example.com",
+                                                                          "internal": False})
+        self.assertEqual(classes.url_info("http://local​host:8080/")["host"], "localhost")
+
     def test_reading_a_long_url_is_linear(self):
         """A URL near the 1 MB frame limit took seconds per reading, and a decide reads it once per target rule too:
         every dotted part of the host was parsed as a number, and each blob: prefix copied the rest of the URL."""

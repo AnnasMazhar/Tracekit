@@ -702,6 +702,27 @@ class CodingPack(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertNotIn("TK-SHELL-PARSE", self.e.decide("Bash", {"command": command})["rule_ids"])
 
+    def test_an_internal_host_with_invisible_characters_decides_as_the_plain_host(self):
+        """A soft hyphen or a zero-width character in a host is dropped by a browser's or Node's URL parser, so
+        http://127.0.0<soft hyphen>.1/ reaches the loopback; the signer read no address and the server pack only
+        flagged it. Every pack, on both engines, holds it at least as the plain host, and the server packs deny it."""
+        rank = {"allow": 0, "flag": 1, "ask": 2, "deny": 3}
+        calls = [(tool, key, extra) for tool, key, extra in (("WebFetch", "url", {"prompt": "read it"}),
+                                                              ("http_request", "url", {"method": "GET"}),
+                                                              ("browser_use:go_to_url", "url", {}))]
+        for pack, engine, e in self.every_pack():
+            for tool, key, extra in calls:
+                for plain, hidden in (("http://127.0.0.1/admin", "http://127.0.0.1­/admin"),
+                                      ("http://169.254.169.254/latest/", "http://169.254.169.254​/latest/"),
+                                      ("http://db.internal/", "http://db.inter­nal/"),
+                                      ("http://localhost:8080/", "http://local⁠host:8080/")):
+                    with self.subTest(pack=pack, engine=engine, tool=tool, url=hidden):
+                        a = e.decide(tool, {key: plain, **extra})
+                        b = e.decide(tool, {key: hidden, **extra})
+                        self.assertGreaterEqual(rank[b["verdict"]], rank[a["verdict"]], (a, b))
+                        if pack in ("server.yaml", "strict.yaml") and tool != "WebFetch":
+                            self.assertEqual(b["verdict"], "deny", b)
+
     def test_opencode_sessions_are_transcripts_to_the_file_tools(self):
         self.verdicts([({"file_path": "/home/u/.local/share/opencode/storage/message/s/m.json"}, "TK-D009"),
                        ({"file_path": "/Users/u/.local/share/opencode/opencode.db"}, "TK-D009")], tool="Write")
