@@ -320,10 +320,10 @@ def _pre(client, p, sid, tid):
             # a named signer (system mode's, or $TRACEKIT_SIGNER's) may not be the person's default; quoted: outside
             # system mode the agent may have set it. On Windows (cmd.exe reads no single quotes) in double quotes,
             # which cmd.exe and PowerShell both read as written but for a quote (PowerShell's curly ones too), $, a
-            # backtick or a line break: a name holding one is left for the person to fill in
+            # backtick, cmd.exe's %VAR% or a line break: a name holding one is left for the person to fill in
             named = client.signer and (
                 shlex.quote(client.signer) if os.name != "nt" else
-                "<TRACEKIT_SIGNER>" if re.search(r'["\u201c-\u201e$`\x00-\x1f\x7f]', client.signer) else
+                "<TRACEKIT_SIGNER>" if re.search(r'["\u201c-\u201e$`%\x00-\x1f\x7f]', client.signer) else
                 f'"{client.signer}"')
             cmd = "tracekit approvals" + (f" --signer {named}" if named else "")
             print(f"[tracekit] waiting for approval {aid} ({'; '.join(d['rule_ids'])}){why}; a person approves it "

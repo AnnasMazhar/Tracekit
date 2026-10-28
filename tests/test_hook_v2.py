@@ -1281,13 +1281,14 @@ class HoldLine(unittest.TestCase):
     def test_on_windows_a_named_signer_is_in_double_quotes(self):
         """cmd.exe reads no single quotes, so `--signer 'x'` fails there; cmd.exe and PowerShell both read double
         quotes as written. A name holding what either still reads inside them (a quote, PowerShell's curly ones, its
-        `$` and backtick, a line break) would run as something else: the person fills it in."""
+        `$` and backtick, cmd.exe's %VAR%, a line break) would run as something else: the person fills it in."""
         for signer, named in (("http://[::1]:8080", '"http://[::1]:8080"'),
                               ("https://127.0.0.1:8443/a&calc", '"https://127.0.0.1:8443/a&calc"'),
                               ('https://127.0.0.1:8443/"&calc&"', "<TRACEKIT_SIGNER>"),
                               ("https://127.0.0.1:8443/\u201d;calc;\u201c", "<TRACEKIT_SIGNER>"),
                               ("https://127.0.0.1:8443/$(calc)", "<TRACEKIT_SIGNER>"),
                               ("https://127.0.0.1:8443/a`", "<TRACEKIT_SIGNER>"),
+                              ("https://127.0.0.1:8443/%COMSPEC%", "<TRACEKIT_SIGNER>"),
                               ("tcp://127.0.0.1:7777\r\ncalc", "<TRACEKIT_SIGNER>")):
             with self.subTest(signer), mock.patch.object(os, "name", "nt"):
                 waiting, _ = self.hold_lines("x", signer)
