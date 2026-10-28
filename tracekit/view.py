@@ -49,7 +49,6 @@ import glob
 import hashlib
 import hmac
 import io
-import itertools
 import logging
 import json
 import os
@@ -1311,15 +1310,17 @@ class Runs:
         return (int(q["log"]), q["tenant"], q["run"]) if scope is observe.ALL or q["tenant"] == scope else None
 
     def _verdict(self, r, i, note, tenant, run_id, cached=True):
-        """{verdict (VERDICTS), integrity, assurance, label, report} of the run in reader `r` of log `i`, or None when it
-        holds no such run; with `cached` False, checked on `r` whatever the cache holds. A kept verdict is checked again
-        RECHECK_S after its check, as StoreFeed's are, so an edit of a run's records in place shows in the list."""
-        run = r.runs.get((tenant, run_id))
+        """({verdict (VERDICTS), integrity, assurance, label, report}, records) of the run in reader `r` of log `i`, or
+        (None, []) when it holds no such run; `records`: the run's records as verify.v2 read them when this call checked
+        it and it verified, else []. With `cached` False, checked on `r` whatever the cache holds. A kept verdict is
+        checked again RECHECK_S after its check, as StoreFeed's are, so an edit of a run's records in place shows in the
+        list."""
+        run, records = r.runs.get((tenant, run_id)), []
         if run is None:
-            return None
+            return None, records
         if not note or run["seqs"][-1] >= note[0]:
             return {"verdict": "pending", "integrity": "PENDING", "assurance": "none", "label": OPERATOR_SIDE,
-                    "report": "No checkpoint covers the run's last record yet."}
+                    "report": "No checkpoint covers the run's last record yet."}, records
         key = (i, tenant, run_id, len(run["seqs"]))
         with self._lock:
             v, at = self._verdicts.get(key, (None, 0)) if cached else (None, 0)
@@ -1327,7 +1328,7 @@ class Runs:
             fd, out = tempfile.mkstemp(suffix=".tkb", dir=self.tmp)   # requests run concurrently: a file each
             os.close(fd)
             try:
-                rep, code, text, _ = check(r, tenant, run_id, note[1], self.logs[i][1], out)
+                rep, code, text, records = check(r, tenant, run_id, note[1], self.logs[i][1], out)
             finally:
                 os.unlink(out)
             v = {"verdict": "failed" if code else "verified", "integrity": rep.integrity,
@@ -1336,7 +1337,7 @@ class Runs:
                 self._verdicts[key] = v, time.time()
                 while len(self._verdicts) > VERDICTS_MAX:
                     self._verdicts.popitem(last=False)
-        return v
+        return v, records
 
     def search(self, scope, q):
         """GET /api/runs: {runs, next}: at most `limit` (RUNS_PAGE) runs that `scope` may read and query `q` (SEARCH_KEYS)
@@ -1365,7 +1366,7 @@ class Runs:
                 r, note = self._open(i)
                 try:
                     for row in rows:
-                        v = self._verdict(r, i, note, row["tenant"], row["run_id"])
+                        v = self._verdict(r, i, note, row["tenant"], row["run_id"])[0]
                         if v and q.get("verdict", v["verdict"]) == v["verdict"]:
                             out.append({"log": i, **row, "verdict": {k: v[k] for k in v if k != "report"}})
                 finally:
@@ -1392,11 +1393,10 @@ class Runs:
         try:
             r, note = self._open(i)
             try:
-                v = self._verdict(r, i, note, tenant, run_id, cached=False)   # the records served are the ones checked
+                v, checked = self._verdict(r, i, note, tenant, run_id, cached=False)
                 if v is None:
                     return None
-                records = list(itertools.islice(r.iter_run(tenant, run_id), start, start + RECORDS_PAGE)) \
-                    if v["verdict"] == "verified" else []
+                records = checked[start:start + RECORDS_PAGE]   # the records the check verified, never a second read
             finally:
                 r.close()
         finally:

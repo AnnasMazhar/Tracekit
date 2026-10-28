@@ -200,6 +200,38 @@ class CentralViewer(unittest.TestCase):
         runs.verifying.release()
         self.assertEqual(self.get(a1, self.acme, port)[0], 200)
 
+    def test_a_run_page_serves_the_records_its_check_verified(self):
+        """/api/run checked the run, then read its records from the store again: a reader that saw an edit between the
+        two (any but one snapshot) served the edited records beside the VERIFIED verdict."""
+        real_open, real_check = view.Runs._open, view.check
+
+        class Edited:   # the store as read after the check: every Bash call renamed
+            def __init__(self, r):
+                self.r, self.checked = r, False
+
+            def __getattr__(self, k):
+                return getattr(self.r, k)
+
+            def iter_run(self, tenant, run_id):
+                for rec in self.r.iter_run(tenant, run_id):
+                    yield json.loads(json.dumps(rec).replace('"Bash"', '"Bosh"')) if self.checked else rec
+
+        def open_(runs, i):
+            r, note = real_open(runs, i)
+            return Edited(r), note
+
+        def check(r, *a, **k):
+            out = real_check(r, *a, **k)
+            r.checked = True
+            return out
+        with mock.patch.object(view.Runs, "_open", open_), mock.patch.object(view, "check", check):
+            port = self.serve(view.Runs(self.files))
+            run = json.loads(self.get(f"/api/run?log=0&tenant=acme&run={self.ids['a1']}", self.acme, port)[2])
+        self.assertEqual(run["verdict"]["verdict"], "verified")
+        tools = {rec["event"]["data"].get("tool") for rec in run["records"]} - {None}
+        self.assertIn("Bash", tools)
+        self.assertNotIn("Bosh", tools)
+
     def test_a_bundle_download_takes_the_same_limit(self):
         """Each /api/bundle request read the log and exported its whole run, with no limit."""
         runs = view.Runs(self.files)
