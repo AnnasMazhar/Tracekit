@@ -619,6 +619,23 @@ class HookV2(unittest.TestCase):
             self.assertEqual([e["data"]["kind"] for e in run.call("read")["events"] if e["type"] == "constraint.added"],
                              ["keep_away", "no_push"])
 
+    def test_a_sessions_constraints_outlive_an_idle_hour_and_any_session_start(self):
+        """A SessionStart (another session's, or this one's resume) removes the call state no hook has written for the
+        signer's idle timeout, not the state that carries the session's constraints to its next run."""
+        self.assertEqual(self.hook("UserPromptSubmit", prompt="Don't touch billing.py."), (0, ""))
+        self.assertEqual(self.pre("ls"), (0, ""))   # t1 never gets its PostToolUse
+        old = time.time() - service.IDLE_S - 1
+        run = os.path.join(self.dir, "run")
+        for f in os.listdir(run):
+            if f.startswith("claude-code-"):
+                os.utime(os.path.join(run, f), (old, old))
+        self.run_handle().call("close_run", reason="idle")   # as the signer's idle close
+        self.assertEqual(self.hook("SessionStart", sid="s2")[0], 0)
+        self.assertEqual(self.hook("SessionStart", source="resume")[0], 0)
+        self.assertFalse(os.path.exists(claude_code._state("s1", "t1")))
+        line = self.held_edit("billing.py", "t2")
+        self.assertIn("(TK-CONSTRAINT): the person's request in this run said not to modify billing.py", line)
+
     def test_a_prompt_too_large_to_record_still_adds_its_constraints(self):
         code, err = self.hook("UserPromptSubmit", prompt="Don't touch billing.py. " + "x" * (1 << 20))
         self.assertIn("over the signer's limit", err)   # an error the harness shows (exit 1 as `tracekit init` wires it)

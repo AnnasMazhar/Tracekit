@@ -79,6 +79,10 @@ RESUMED = ("resume", "fork")   # SessionStart sources whose transcript already h
 FULL = ("[tracekit] the run has the most file constraints the signer takes: what this prompt says not to change was "
         "not added, so every write of the run is now held for your approval")
 APPROVAL_WAIT_S = 540   # a PreToolUse hook, approval wait included, answers within this: below its timeout (install.HOOK_TIMEOUT)
+# lean: a session's state is kept this long after its last hook event (Claude Code's default cleanupPeriodDays, after
+# which it deletes the transcript); a session continued later starts without its constraints; keep the state while
+# its transcript exists if sessions are continued later than that
+SESSION_KEEP_S = 30 * 86400
 
 
 class HookClient(Client):
@@ -577,18 +581,21 @@ def _unfinished(client, sid):
 
 
 def _prune():
-    """Removes session and tool call state no hook has written for longer than the signer's default run idle timeout:
-    the signer has closed those runs, and a call that never got its PostToolUse leaves its state behind."""
+    """Removes the runtime state no hook has written for a while: a session's after SESSION_KEEP_S, as it carries the
+    session's constraints and transcript to its later runs (after an idle close, or a resume); any other (a tool
+    call's, which one that never got its PostToolUse leaves behind, or a lock no state needs) after the signer's
+    default run idle timeout, when the signer has closed its run."""
     from tracekit.signer.service import IDLE_S
-    old = time.time() - IDLE_S
+    now = time.time()
     for f in sorted(glob.glob(os.path.join(glob.escape(autospawn.runtime_dir()), "claude-code-*")),
                     key=lambda f: f.endswith(".lock")):   # the state first, then the locks it no longer needs
         # lean: a lock goes only once its session state has; a hook that resumes that very session at this instant
         # could lock a fresh file beside one still held, so two runs get registered, rare enough for dev mode
         if f.endswith(".lock") and os.path.exists(f[:-len(".lock")] + ".json"):
             continue
+        session = f.endswith(".json") and os.path.basename(f).count(".") == 1   # not claude-code-<sid>.<call>.json
         try:
-            if os.path.getmtime(f) < old:
+            if os.path.getmtime(f) < now - (SESSION_KEEP_S if session else IDLE_S):
                 os.remove(f)
         except OSError:   # removed by a parallel hook
             pass
