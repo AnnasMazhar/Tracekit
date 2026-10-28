@@ -27,6 +27,7 @@ from tracekit.policy2 import classes, compile as pc, engine, shell  # noqa: E402
 from tracekit.policy2.engine import MAX_SUBJECT, Engine  # noqa: E402
 
 HAVE_RE2 = importlib.util.find_spec("re2") is not None
+BACKENDS = ("re2", "regex") if HAVE_RE2 else ("regex",)
 
 
 class Compile(unittest.TestCase):
@@ -933,7 +934,7 @@ class Shell(unittest.TestCase):
                     "echo $(( a[$i] ))", "echo $(( $(nproc) * 2 ))"):
             for pack in ("coding.yaml", "dev.yaml", "server.yaml", "strict.yaml"):
                 pol = pc.build(os.path.join(PACKS, pack))[0]
-                for policy_engine in (Engine(pol, "re2"), Engine(pol, "regex")):
+                for policy_engine in (Engine(pol, backend) for backend in BACKENDS):
                     with self.subTest(pack=pack, cmd=cmd):
                         self.assertNotIn("TK-SHELL-PARSE", policy_engine.decide("Bash", {"command": cmd})["rule_ids"])
 
@@ -948,7 +949,7 @@ class Shell(unittest.TestCase):
                 shell.parse(cmd)
             for pack in ("coding.yaml", "dev.yaml", "server.yaml", "strict.yaml"):
                 pol = pc.build(os.path.join(PACKS, pack))[0]
-                for policy_engine in (Engine(pol, "re2"), Engine(pol, "regex")):
+                for policy_engine in (Engine(pol, backend) for backend in BACKENDS):
                     with self.subTest(pack=pack, cmd=cmd):
                         self.assertIn("TK-SHELL-PARSE", policy_engine.decide("Bash", {"command": cmd})["rule_ids"])
         self.assertIn(["date"], [command["argv"] for command in shell.parse("v=a[`date`]; echo $((v))")])
