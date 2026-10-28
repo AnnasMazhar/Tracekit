@@ -478,7 +478,7 @@ class View(unittest.TestCase):
             data = f.read()
         with open(path, "w", encoding="utf-8") as f:
             f.write(data.replace('"tool":"Bash"', '"tool":"Bosh"'))
-        with mock.patch.object(view.time, "time", return_value=time.time() + view.RECHECK_S + 1):
+        with mock.patch.object(view.time, "monotonic", return_value=time.monotonic() + view.RECHECK_S + 1):
             for _ in range(2):   # one stale run a pass: the signer's own, then this one
                 feed.refresh()
         self.assertIsNone(feed.rows(observe.ALL, "default", run_id))
@@ -1818,9 +1818,10 @@ class LiveRuns(unittest.TestCase):
         self.fake.checkpoint_latest.return_value = (10 ** 6, "note")
         self.now, self.cfg = [1000.0], {"data_dir": self.d}
         real = view.reader   # another test's feed, still watching its own store, reads that store
-        clock = types.SimpleNamespace(time=lambda: self.now[0], thread_time=lambda: self.now[0], sleep=time.sleep)
+        self.clock = types.SimpleNamespace(time=lambda: self.now[0], monotonic=lambda: self.now[0],
+                                           thread_time=lambda: self.now[0], sleep=time.sleep)
         for p in (mock.patch.object(view, "reader", side_effect=lambda cfg: self.fake if cfg is self.cfg else real(cfg)),
-                  mock.patch.object(view, "time", clock)):
+                  mock.patch.object(view, "time", self.clock)):
             p.start()
             self.addCleanup(p.stop)
 
@@ -1982,6 +1983,20 @@ class LiveRuns(unittest.TestCase):
         self.assertTrue(wait_for(lambda: set(os.listdir(why)) == live, 10), (sorted(os.listdir(why)), sorted(live)))
         store.scan(announce=False)
         self.assertEqual(set(store._cache), {os.path.join(why, n) for n in live})
+
+    def test_a_clock_stepped_back_still_checks_a_run_again(self):
+        """RECHECK_S and BACKOFF were timed by the wall clock: after it stepped back (an NTP step, a manual change), an
+        edited run stayed VERIFIED for the step plus RECHECK_S."""
+        verdicts = [VERIFIED, FAILED]
+        feed = self.feed(lambda run_id: verdicts.pop(0))
+        self.refresh(feed)
+        wall = self.now[0] - 3600
+        self.clock.time = lambda: wall   # the wall clock steps back an hour; the monotonic one goes on
+        self.now[0] += view.RECHECK_S
+        self.refresh(feed)
+        self.assertEqual(self.checks, ["r1", "r1"])
+        with feed.lock:
+            self.assertEqual(feed.records[-1]["review"]["verdict"], "failed")
 
     def test_a_run_that_did_not_grow_is_checked_again_and_adds_no_rows_while_unchanged(self):
         """A run was checked only when it grew, so an edit of records already shown stayed VERIFIED until a restart."""

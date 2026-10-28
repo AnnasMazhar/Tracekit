@@ -841,7 +841,8 @@ class StoreFeed:
         # past it the oldest records leave the live view (base counts them), as observe.Feed's
         self.max_records = int(os.environ.get("TRACEKIT_OBSERVE_MAX_RECORDS", "50000") or 50000)
         # (tenant, run_id) -> {"count": records verified, "shown": records translated, "failed": report, "checked": when
-        # its last check ended, "took": the CPU time it took}
+        # its last check ended (time.monotonic(): never stepped back, as the wall clock can be), "took": the CPU time it
+        # took}
         self.runs = {}
         self.memo = set()   # verify.v2's memo: a run is checked again at each checkpoint, its new records only in full
         self.due = 0   # when a run put off (BACKOFF, RECHECK_S) is due, so _watch refreshes with no store change
@@ -890,7 +891,7 @@ class StoreFeed:
                     except FileNotFoundError:
                         stamp.append(None)
                 # lean: a Postgres store is read again every POLL_S; compare its latest note first if that loads it
-                if stamp != seen or self.pg or time.time() >= self.due:
+                if stamp != seen or self.pg or time.monotonic() >= self.due:
                     seen = stamp
                     try:
                         self.refresh()
@@ -910,7 +911,7 @@ class StoreFeed:
         shown up to the newest checkpoint, not only once it stops, and checked again no sooner than BACKOFF times its
         last check's time after it. A run that did not grow is checked again RECHECK_S after its last check (the run
         checked longest ago, one a pass), so a later edit of its records shows."""
-        now, stale = time.time(), None
+        now, stale = time.monotonic(), None
         due = [now + RECHECK_S]
         self.due = due[0]   # a store that cannot be read is tried again when it changes, not every POLL_S
         r = reader(self.cfg)
@@ -966,7 +967,7 @@ class StoreFeed:
                              "label": OPERATOR_SIDE, "agent": None}
             with self.lock:
                 self.runs[key] = dict(self.runs.get(key) or {"count": 0, "shown": 0}, count=count,
-                                      failed="NOT CHECKED (error)", checked=time.time())
+                                      failed="NOT CHECKED (error)", checked=time.monotonic())
                 self._append([dict(row, tenant=key[0])], key)
 
     def _verify(self, reader, note, key, count):
@@ -976,7 +977,7 @@ class StoreFeed:
                                           self.memo)
         if len(self.memo) > MEMO_MAX:   # lean: forgets every run's records at once; an LRU if big stores re-check often
             self.memo.clear()
-        state = dict(self.runs.get(key) or {"count": 0, "shown": 0, "failed": None}, checked=time.time(),
+        state = dict(self.runs.get(key) or {"count": 0, "shown": 0, "failed": None}, checked=time.monotonic(),
                      took=time.thread_time() - t)
         if not code and count == state["count"] and not state["failed"]:   # checked again, unchanged: nothing new
             with self.lock:
@@ -1061,19 +1062,19 @@ class StoreFeed:
                 while True:
                     if self._stop.is_set():
                         return
-                    now = time.time()
+                    now = time.monotonic()
                     ready = next((k for k, v in self._mirror.items() if v is None or due.get(k, 0) <= now), None)
                     if ready:
                         break
                     self._mlock.wait(min(due[k] for k in self._mirror) - now if self._mirror else None)
                 records = self._mirror.pop(ready)
-            t, cpu = time.time(), time.thread_time()
+            t, cpu = time.monotonic(), time.thread_time()
             try:
                 self.on_run(*ready, records, self.tr.reasons)
             except Exception as e:   # the run's own view does not depend on its graph
                 print(f"tracekit view: no graph for run {ready[1]}: {e}", file=sys.stderr, flush=True)
             due = {k: v for k, v in due.items() if v > t}   # only runs still put off
-            due[ready] = time.time() + BACKOFF * (time.thread_time() - cpu)
+            due[ready] = time.monotonic() + BACKOFF * (time.thread_time() - cpu)
 
     def _own(self, e, sev, title, text, tape):
         """A row the viewer makes (a verifier report, a finding of its analysis): no record of the log, so no seq and
@@ -1328,12 +1329,12 @@ class Runs:
         """({verdict (VERDICTS), integrity, assurance, label, report}, records) of the run in reader `r` of log `i`, or
         (None, []) when it holds no such run; `records`: the run's records as verify.v2 read them when this call checked
         it and it verified, else []. With `cached` False, checked on `r` whatever the cache holds (the caller holds a
-        check slot). A kept verdict is checked again RECHECK_S after its check, as StoreFeed's are, so an edit of a run's
-        records in place shows in the list. A list checks with the list's own slot (self.listing), so a run page always
-        has one of its two; with that slot taken it shows FAILED as it is and NOT CHECKED for the rest (a run never
-        checked, or a VERIFIED that is past due): an edit since must not read VERIFIED. A verdict is kept as of `at`,
-        when `r` took its snapshot, and never over one of a later snapshot: a list's check of a run edited since it
-        began must not put VERIFIED back over the FAILED its run page found."""
+        check slot). A kept verdict is checked again RECHECK_S after its check by time.monotonic(), as StoreFeed's are,
+        so an edit of a run's records in place shows in the list. A list checks with the list's own slot (self.listing),
+        so a run page always has one of its two; with that slot taken it shows FAILED as it is and NOT CHECKED for the
+        rest (a run never checked, or a VERIFIED that is past due): an edit since must not read VERIFIED. A verdict is
+        kept as of `at`, when `r` took its snapshot, and never over one of a later snapshot: a list's check of a run
+        edited since it began must not put VERIFIED back over the FAILED its run page found."""
         run, records = r.runs.get((tenant, run_id)), []
         if run is None:
             return None, records
