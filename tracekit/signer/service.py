@@ -382,6 +382,10 @@ AGENT_REVIEWS_PER_RUN, AGENT_REVIEWS_PER_TENANT, AGENT_REVIEWS_WINDOW_S = 10, 10
 # characters a person reading the reviewer view can't see but a model reads: control, format (bidi, zero-width, tags)
 # and line/paragraph separators
 _HIDDEN = ("Cc", "Cf", "Zl", "Zp")
+# and Default_Ignorable_Code_Point (Unicode's DerivedCoreProperties.txt; unicodedata doesn't carry it): variation
+# selectors, Hangul fillers and the rest, which a reader doesn't see and a model reads (bytes hidden after a character)
+_IGNORABLE = re.compile("[\u00ad\u034f\u061c\u115f-\u1160\u17b4-\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f"
+                        "\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U000e0000-\U000e0fff]")
 OTLP_IMPORT = "otlp_import"   # an `authorize` grant, never a default: OTLP/HTTP import (otlp config section)
 ON_BEHALF = "approval_decide_on_behalf"   # an `authorize` grant, never a default: a bridge answers for its people
 OTLP_MAX_SPANS = 512
@@ -569,9 +573,10 @@ def _agents(approvals, authorize, multi_tenant_apps):
 
 
 def _escaped(value):
-    """`value` with control and bidirectional-override characters in its strings (and keys) written as \\uXXXX text."""
+    """`value` with control, format (bidirectional overrides, TAG characters) and default-ignorable characters
+    (variation selectors, Hangul fillers) in its strings (and keys) written as \\uXXXX text."""
     if isinstance(value, str):
-        return "".join(c if unicodedata.category(c) not in _HIDDEN else
+        return "".join(c if unicodedata.category(c) not in _HIDDEN and not _IGNORABLE.match(c) else
                        f"\\u{ord(c):04x}" if ord(c) <= 0xFFFF else f"\\U{ord(c):08x}" for c in value)
     if isinstance(value, list):
         return [_escaped(v) for v in value]

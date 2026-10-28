@@ -451,15 +451,18 @@ def make_handler(feed, token, allowed_hosts=None, secure=False, login=None, appr
                     return v
             return ""
 
-        def _scope(self):
-            """ALL for the token (or no token), a tenant for an OIDC session, else None."""
+        def _token_ok(self):
+            """The token's request (or no token): its bearer header or the cookie it was exchanged for, never an OIDC
+            session, whatever its role."""
             if not token:
-                return ALL
+                return True
             bearer = self.headers.get("Authorization", "")
-            if hmac.compare_digest(bearer.encode(), f"Bearer {token}".encode()) or \
-                    _session_ok(self.session_key, self._cookie()):
-                return ALL
-            return login and login.tenant(self._cookie())
+            return hmac.compare_digest(bearer.encode(), f"Bearer {token}".encode()) or \
+                _session_ok(self.session_key, self._cookie())
+
+        def _scope(self):
+            """ALL for the token (or no token), a tenant for an OIDC session (ALL for an operator-admin's), else None."""
+            return ALL if self._token_ok() else login and login.tenant(self._cookie())
 
         def _cookie_attrs(self):
             return "; HttpOnly; Path=/" + ("; Secure" if secure else "")
@@ -518,7 +521,7 @@ def make_handler(feed, token, allowed_hosts=None, secure=False, login=None, appr
             if runs and u.path in ("/runs", "/api/runs", "/api/run", "/api/bundle"):
                 return self._runs(u, scope)
             if why and u.path.startswith("/api/why/"):
-                if scope is not ALL:
+                if not self._token_ok():
                     return self._send(403, '{"error":"why logs need the viewer token, not a sign-in"}')
                 m = re.match(r"^/api/why/runs/([^/]+)$", u.path)
                 if u.path != "/api/why/workspace" and not m:
@@ -546,15 +549,15 @@ def make_handler(feed, token, allowed_hosts=None, secure=False, login=None, appr
                 if not (q.get("tenant") and q.get("run")):
                     return self._send(400, '{"error":"needs tenant and run"}')
                 try:
-                    rows = feed.rows(scope, q["tenant"], q["run"])
+                    body = feed.rows(scope, q["tenant"], q["run"])
                 except Busy:
                     return self._send(503, '{"error":"checking other runs: try again shortly"}',
                                       headers=[("Retry-After", "5")])
                 except (OSError, StorageUnavailable, StorageCorrupt):
                     return self._send(502, '{"error":"store unavailable"}')
-                if rows is None:
+                if body is None:
                     return self._send(404, '{"error":"no such verified run"}')
-                return self._send(200, json.dumps({"rows": rows}, ensure_ascii=False))
+                return self._send(200, body)
             if u.path == "/api/verify":
                 n, problems, head = feed.verify() if scope is ALL else feed.verify(scope)
                 return self._send(200, json.dumps({"records": n, "ok": not problems, "problems": problems, "head": head,
@@ -576,6 +579,9 @@ def make_handler(feed, token, allowed_hosts=None, secure=False, login=None, appr
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
             try:
                 out = {"/api/runs": runs.search, "/api/run": runs.run, "/api/bundle": runs.bundle}[u.path](scope, q)
+            except Busy:
+                return self._send(503, '{"error":"checking other runs: try again shortly"}',
+                                  headers=[("Retry-After", "5")])
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
             except (OSError, StorageUnavailable, StorageCorrupt):
@@ -659,7 +665,7 @@ def make_handler(feed, token, allowed_hosts=None, secure=False, login=None, appr
             m = re.match(r"^/api/why/runs/([^/]+)/(tests|attribute)$", path)
             if not m:
                 return self._send(404, '{"error":"not found"}')
-            if self._scope() is not ALL:
+            if not self._token_ok():
                 return self._send(401, '{"error":"missing or wrong token"}')
             # CSRF: a JSON body needs a preflight a cross-site page never gets answered, on top of SameSite=Strict
             if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json" or (
