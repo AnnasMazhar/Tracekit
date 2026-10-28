@@ -49,8 +49,9 @@ release: that, not this page, is the evidence. <a id="save" hidden></a></p>
 <script>
 "use strict";
 // every value is set with textContent, never parsed as markup; every invisible character (controls, format
-// characters such as bidi overrides and TAG characters, line and paragraph separators) is shown escaped
-const vis = s => String(s).replace(/(?![\t\n\r])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu,
+// characters such as bidi overrides and TAG characters, line and paragraph separators, and default-ignorable
+// ones such as variation selectors and Hangul fillers) is shown escaped
+const vis = s => String(s).replace(/(?![\t\n\r])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu,
   c => "\\u" + (c.codePointAt(0) > 0xffff ? "{" + c.codePointAt(0).toString(16) + "}" : c.codePointAt(0).toString(16).padStart(4, "0")));
 const $ = id => document.getElementById(id);
 let next = null, current = null;

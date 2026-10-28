@@ -2886,12 +2886,13 @@
     const RAW = /*__RAW_DATA__*/null;
     const $ = id => document.getElementById(id);
     // every invisible character (controls, format characters such as bidi overrides and TAG characters, line and
-    // paragraph separators; not tab, newline or carriage return) is shown as \uXXXX, or \u{XXXXX} past U+FFFF, so a
-    // name or an argument can't hide text or render as something else
+    // paragraph separators, and default-ignorable ones such as variation selectors and Hangul fillers; not tab, newline
+    // or carriage return) is shown as \uXXXX, or \u{XXXXX} past U+FFFF, so a name or an argument can't hide text or
+    // render as something else
     // lean: a filter clicked on such a name compares the shown text and matches nothing; decode data-* if that matters
-    const esc = s => String(s ?? "").replace(/[&<>"']|(?![\t\n\r])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || "\\u" + (c.codePointAt(0) > 0xffff ? "{" + c.codePointAt(0).toString(16) + "}" : c.codePointAt(0).toString(16).padStart(4, "0"))));
+    const esc = s => String(s ?? "").replace(/[&<>"']|(?![\t\n\r])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || "\\u" + (c.codePointAt(0) > 0xffff ? "{" + c.codePointAt(0).toString(16) + "}" : c.codePointAt(0).toString(16).padStart(4, "0"))));
     // the same for text set as textContent, which needs no markup escaped
-    const vis = s => String(s ?? "").replace(/(?![\t\n\r])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, c => "\\u" + (c.codePointAt(0) > 0xffff ? "{" + c.codePointAt(0).toString(16) + "}" : c.codePointAt(0).toString(16).padStart(4, "0")));
+    const vis = s => String(s ?? "").replace(/(?![\t\n\r])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu, c => "\\u" + (c.codePointAt(0) > 0xffff ? "{" + c.codePointAt(0).toString(16) + "}" : c.codePointAt(0).toString(16).padStart(4, "0")));
     const FIELD = Object.assign(Object.create(null), { Bash: "command", Write: "file_path", Edit: "file_path", MultiEdit: "file_path", Read: "file_path", NotebookEdit: "notebook_path", WebFetch: "url", WebSearch: "query", Glob: "pattern", Grep: "pattern", Agent: "description", Task: "description" });
     const FILE_TOOLS = Object.assign(Object.create(null), { Read: "R", Write: "W", Edit: "W", MultiEdit: "W", NotebookEdit: "W" });   // looked up by a tool's name: no prototype
     const SEVERE = new Set(["denied", "out_of_scope_write", "secrets_access"]);
