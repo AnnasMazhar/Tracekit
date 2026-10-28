@@ -642,6 +642,40 @@ class CodingPack(unittest.TestCase):
                 with self.subTest(pack=pack, engine=engine, command=command):
                     self.assertNotIn("TK-D008", e.decide("Bash", {"command": command})["rule_ids"])
 
+    def test_transcript_rule_reads_deletes_run_through_stdin_trap_at_osascript_zip_and_unreadable_lines(self):
+        """TK-D008 read the whole line until #421 moved it to each command's write targets, which lost deletes whose
+        names come from a herestring or heredoc fed to xargs, that trap, at or batch run later, that osascript's do
+        shell script runs, that zip -m makes of its sources, or that a line the parser can't read runs (a pipe into
+        sh, fish -c, a name built from $IFS): each was only flagged or asked. The parser reads trap's action and at's or
+        batch's herestring or heredoc as code; xargs's stdin text, at or batch from a pipe and osascript count as
+        writes of every word on the line, and an unreadable line's normalised lines too."""
+        t = "~/.claude/projects"
+        deletes = ("xargs rm -rf <<< " + t, "xargs -0 rm -rf <<< " + t, "xargs -I{} rm -rf {} <<< " + t,
+                   "xargs rm -rf <<EOF\n" + t + "\nEOF", "trap 'rm -rf " + t + "' EXIT",
+                   'trap "rm -rf ' + t + '" EXIT; true', "trap -- 'rm -rf " + t + "' EXIT",
+                   "echo 'rm -rf " + t + "' | at now", "at now <<< 'rm -rf " + t + "'",
+                   "at now <<EOF\nrm -rf " + t + "\nEOF", "batch <<< 'rm -rf " + t + "'", "echo 'rm -rf " + t + "' | batch",
+                   "osascript -e 'do shell script \"rm -rf " + t + "\"'",
+                   "osascript -e 'tell app \"Finder\" to delete POSIX file \"/Users/u/.claude/projects\"'",
+                   "zip -rm /tmp/x.zip " + t, "zip -mr /tmp/x.zip " + t, "zip -r -m /tmp/x.zip " + t,
+                   "zip --move -r /tmp/x.zip " + t, "ls " + t + "/* | zip -m@ /tmp/x.zip",
+                   "echo 'rm -rf " + t + "' | sh", "cat <<'EOF' | sh\nrm -rf " + t + "\nEOF", "fish -c 'rm -rf " + t + "'",
+                   "rm${IFS}-rf${IFS}" + t)
+        kept = ("trap 'rm -rf \"$tmp\"' EXIT", "trap cleanup EXIT", "trap - EXIT", "zip -r out.zip " + t,
+                "zip -rm out.zip build", "at now <<< 'ls " + t + "'", "xargs -n1 echo <<< " + t,
+                "osascript -e 'display notification \"done\"'", "cat " + t + "/p/a.jsonl | xargs echo")
+        for pack, engine, e in self.every_pack():
+            for command in deletes:
+                with self.subTest(pack=pack, engine=engine, command=command):
+                    d = e.decide("Bash", {"command": command})
+                    self.assertEqual((d["verdict"], "TK-D008" in d["rule_ids"]), ("deny", True), d)
+            for command in kept:
+                with self.subTest(pack=pack, engine=engine, command=command):
+                    self.assertNotIn("TK-D008", e.decide("Bash", {"command": command})["rule_ids"])
+        # trap's action and what at schedules are code every rule reads
+        self.verdicts([("trap 'sudo id' EXIT", "TK-D001"), ("at now <<< 'sudo id'", "TK-D001"),
+                       ("batch <<EOF\ngit push --force origin main\nEOF", "TK-D003")])
+
     def test_opencode_sessions_are_transcripts_to_the_file_tools(self):
         self.verdicts([({"file_path": "/home/u/.local/share/opencode/storage/message/s/m.json"}, "TK-D009"),
                        ({"file_path": "/Users/u/.local/share/opencode/opencode.db"}, "TK-D009")], tool="Write")

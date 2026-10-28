@@ -1,13 +1,13 @@
 """Structural shell parser for policy matching (design §4.4; no bashlex).
 
 `parse(command)` returns every simple command the line would run, including those reached through wrappers, `sh -c`
-strings, substitutions, heredocs into a shell and interpreter one-liners:
-`{"argv": [...], "via": [...], "pipeline": n, "glob": bool, "opaque": bool}`. argv[0] is a basename, the part after any
-`\\` in lower case and without a `.exe` (the agent's file system may ignore case: macOS runs git for `Git`; Windows
-runs git.exe for git); `via` says how the command was
-reached (empty at top level); commands with the same `pipeline` are stages of one pipeline, in order. `opaque`: what
+strings, substitutions, heredocs into a shell, at or batch, trap's action and interpreter one-liners:
+`{"argv": [...], "via": [...], "pipeline": n, "glob": bool, "opaque": bool, "stdin": [...]}`. argv[0] is a basename,
+the part after any `\\` in lower case and without a `.exe` (the agent's file system may ignore case: macOS runs git
+for `Git`; Windows runs git.exe for git); `via` says how the command was reached (empty at top level); commands with the same `pipeline` are stages of one pipeline, in order. `opaque`: what
 the command runs cannot be read from the line (a glob, brace or expansion in its name, a shell or interpreter reading
-its script from a pipe, a file or inherited stdin, `source` of a stream).
+its script from a pipe, a file or inherited stdin, `source` of a stream). `stdin`: the herestring and heredoc text the
+command reads (the names `xargs rm <<< x` deletes).
 Variables are not expanded and encodings are not decoded. A line it cannot parse raises ParseError.
 
 `analyse(command)` also returns the normalised lines: each parsed script with quotes and escapes resolved and
@@ -677,8 +677,10 @@ class _Parser:
         self.ctx["steps"].append(step)
         for d in docs:
             d["cmds"], d["data"], d["step"] = cmds, data, step
+        for c in cmds:
+            c["stdin"] += strings
         shell = _stdin_shell(cmds)
-        if shell and not docs and not strings:
+        if shell and not docs and not strings and shell["argv"][0] in SHELLS:
             shell["opaque"] = True   # its script comes from a pipe, a file or inherited stdin
         for text in strings if shell else ():
             self.nested(text, shell["via"] + [shell["argv"][0] + " <<<"])
@@ -725,7 +727,8 @@ class _Parser:
             # xargs -I{} inserting its input into a script or a command name: what runs comes from stdin
             tainted = repl is not None and (repl in argv[0] or (
                 (name in SHELLS or _kind(name)) and any(repl in a for a in args)))
-            cmd = {"argv": [name] + args, "via": via, "pipeline": pid, "glob": glob, "opaque": unreadable[0] or tainted}
+            cmd = {"argv": [name] + args, "via": via, "pipeline": pid, "glob": glob, "opaque": unreadable[0] or tainted,
+                   "stdin": []}
             self.ctx["cmds"].append(cmd)
             cmds.append(cmd)
             if name in DASH_C:
@@ -781,6 +784,9 @@ class _Parser:
                 cmd["opaque"] = True
             elif name == "eval":
                 self.nested(" ".join(args), via + ["eval"])
+            elif name == "trap" and len(args) > 1 and not re.fullmatch(r"-[lpP]*", args[0]):
+                # its action runs on a signal or at exit (`trap 'rm -rf "$d"' EXIT`); `-` or a lone condition resets
+                self.nested(args[1] if args[0] == "--" else args[0], via + ["trap"])
             elif name == "ssh":
                 self.nested(_ssh_command(args), via + ["ssh"])
             elif name == "nix-shell":   # --run and --command take a script, as sh -c does
@@ -846,6 +852,8 @@ class _Parser:
                     break
                 lines.append(line)
             body = "\n".join(lines)
+            for c in d["cmds"]:
+                c["stdin"].append(body)
             # a data heredoc's body, unless a command substitution in it runs (what it runs may read a heredoc of its
             # own, which only this text holds)
             if d["data"] and not d["via"] and not (d["expand"] and re.search(r"\$\(|`", body)):
@@ -1076,7 +1084,9 @@ def _lines(words, progs):
 
 
 def _stdin_shell(cmds):
-    return next((c for c in cmds if c["argv"][0] in SHELLS and _shell_mode(c["argv"][1:])[0] == "stdin"), None)
+    """A shell reading its script from stdin, or at or batch, which read from it the commands they schedule."""
+    return next((c for c in cmds if c["argv"][0] in SHELLS and _shell_mode(c["argv"][1:])[0] == "stdin"
+                 or c["argv"][0] in ("at", "batch")), None)
 
 
 def _stdin_interpreter(cmds):
