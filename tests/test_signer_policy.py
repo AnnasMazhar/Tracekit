@@ -343,6 +343,8 @@ class CodingPack(unittest.TestCase):
             'mysql -e"DROP TABLE users"',
             'psql -c "DELETE FROM users" -d prod',
             'docker exec db psql -c "DROP TABLE users"',
+            'docker compose exec db psql -c "DROP TABLE users"',
+            'docker-compose exec -T db mysql -e "DROP DATABASE app"',
             'kubectl exec -n ns pod -- psql -c "DROP TABLE users"',
             'sqlite3 app.db "DROP TABLE users"',
             'clickhouse-client --query "DROP TABLE users"',
@@ -380,6 +382,7 @@ class CodingPack(unittest.TestCase):
             # SELECT-only and UPDATE-only transactions still don't match: the rule holds DROP, TRUNCATE
             # and unscoped DELETE only, whatever the options before the flag
             'psql -c "BEGIN; SELECT 1; ROLLBACK;"',
+            'docker compose exec db psql -c "SELECT 1"',
             # a lone minus or slash inside an UPDATE is not a comment, and an UPDATE isn't held
             'psql -c "BEGIN; UPDATE t SET x = a/-5; ROLLBACK;"',
             'psql -c "BEGIN; UPDATE t SET x = a/b; ROLLBACK;"',

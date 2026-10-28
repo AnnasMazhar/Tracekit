@@ -251,3 +251,4 @@
 {"tool": "Bash", "args": {"command": "redis-cli -h cache.internal -n 2 <<< 'FLUSHDB ASYNC'"}, "expect": "ask", "note": "flush fed to redis-cli as a herestring"}
 {"tool": "Bash", "args": {"command": "redis-cli -h cache.internal <<'EOF'\nSELECT 2\nFLUSHDB\nEOF"}, "expect": "ask", "note": "flush fed to redis-cli in a heredoc"}
 {"tool": "Bash", "args": {"command": "{ echo FLUSHALL; } | valkey-cli -h cache.internal"}, "expect": "ask", "note": "flush echoed in a brace group into valkey-cli"}
+{"tool": "Bash", "args": {"command": "docker compose exec db psql -c 'DROP TABLE users'"}, "expect": "ask", "note": "dropping a table through docker compose exec"}
