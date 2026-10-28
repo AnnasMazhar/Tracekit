@@ -1170,6 +1170,27 @@ class InvisibleCharacters(unittest.TestCase):
         self.assertIn("Thanks\\u{e0143}\\u{e0135}\\u{e013e}\\u{e0134}", pre)   # S E N D as variation selectors, shown
 
 
+class RunChip(unittest.TestCase):
+    def test_a_verified_run_reads_checks_stopped_while_the_viewer_checks_nothing(self):
+        """While the viewer's checks were stopped (VERIFICATION STOPPED), a selected run's chip still read a green
+        RUN VERIFIED: no later edit of it would have shown."""
+        needs_node(self)
+        out = json.loads(page_js(["renderTop", "filterChips"], """
+            const el = {}, $ = id => el[id] ??= { classList: { toggle() {} } };
+            const document = { URL: "http://127.0.0.1/", body: { classList: { toggle() {} } } };
+            let mode = "live", liveOk = true, liveErr = "", SOURCE = "", STOPPED = "";
+            const BOOT = null, V2 = true, scope = "r1", F = {}, TZ = "UTC", nowTs = () => 0, esc = s => s, put = () => {};
+            const RUNS = new Map([["r1", { id: "r1", verdict: "verified", integrity: "VERIFIED", label: "operator-side" }]]);
+            const chainState = { ok: false, n: 0, detail: "" }, seen = [];
+            for (const s of ["", "verification stopped: the store can't be checked"]) {
+              STOPPED = s; renderTop(); seen.push([el.chain.className, el.chain.textContent, el.chain.title]);
+            }
+            process.stdout.write(JSON.stringify(seen));"""))
+        self.assertEqual(out, [["chain ok", "RUN \u2713 VERIFIED", "VERIFIED \u00b7 operator-side"],
+                               ["chain", "RUN \u2713 VERIFIED \u00b7 CHECKS STOPPED",
+                                "VERIFIED \u00b7 operator-side \u00b7 verification stopped: the store can't be checked"]])
+
+
 class NothingLost(unittest.TestCase):
     """v7 moved today's viewer into pages and a run's views (the decision of 27 Oct 17:55 in #439): one check per row of
     its table and per item of the Keep list, so a later change that drops a feature fails here."""
