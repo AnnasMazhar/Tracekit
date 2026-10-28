@@ -32,17 +32,10 @@ OK, WARN, FAIL = "ok", "warn", "fail"
 NETWORK_FS = {"nfs", "nfs4", "cifs", "smb", "smb3", "smbfs", "afpfs", "webdav", "fuse", "fuseblk", "9p", "macfuse",
               "osxfuse"}
 MAX_SKEW_S = 300
-
-
-def reinit(version):
-    """System mode's init as docs/deploy.md gives it for a Python `version`: from /opt's venv on 3.11+; on 3.9 and 3.10
-    from the system Python, since init run from that venv breaks /opt/tracekit there."""
-    python = "/opt/tracekit/bin/python" if version >= (3, 11) else "/usr/bin/python3"
-    return f"sudo {python} -I -m tracekit init --v2 --user <agent-user>" + (
-        " --experimental-macos" if sys.platform == "darwin" else "")   # init refuses macOS system mode without it
-
-
-REINIT = reinit(sys.version_info[:2])   # doctor runs from /opt's venv, which init made from the system Python
+# system mode's init from a root-owned clone of the release, as the plugin and CI run it: it works on every Python,
+# whether or not /opt/tracekit exists or can be trusted (docs/deploy.md also gives the routes through /opt's venv)
+REINIT = ("from a root-owned clone of the release (docs/deploy.md#laptop-system-mode), sudo /usr/bin/python3 -m tracekit "
+          "init --v2 --user <agent-user>" + (" --experimental-macos" if sys.platform == "darwin" else ""))
 ROOT_DOCTOR = "run doctor as root (system mode: sudo /opt/tracekit/bin/python -I -m tracekit doctor)"
 FAIL_CLOSED = "call blocked (fail-closed)"   # the pre-tool wrapper's words (install._blocking); before 1.3 every event's
 # wrapper had them, so a hook that couldn't run blocked a prompt or a tool result too (D-HOOKS-EVENT warns)

@@ -530,14 +530,15 @@ class Reinit(unittest.TestCase):
         """On macOS init refuses system mode without --experimental-macos, which the fix left out."""
         self.assertEqual(doctor.REINIT.endswith(" --experimental-macos"), sys.platform == "darwin")
 
-    def test_the_reinit_fix_is_the_init_docs_deploy_gives_for_the_python(self):
-        """The fix ran init with /usr/bin/python3 -m tracekit: on a Python 3.11+ that refuses pip (PEP 668), Tracekit is
-        only in /opt's venv, and that found no module named tracekit."""
-        self.assertTrue(doctor.reinit((3, 11)).startswith("sudo /opt/tracekit/bin/python -I -m tracekit init --v2 "))
-        self.assertTrue(doctor.reinit((3, 13)).startswith("sudo /opt/tracekit/bin/python -I -m tracekit init --v2 "))
-        for old in ((3, 9), (3, 10)):   # init from /opt's venv breaks it there: the system Python's, as deploy.md says
-            self.assertTrue(doctor.reinit(old).startswith("sudo /usr/bin/python3 -I -m tracekit init --v2 "))
-        self.assertEqual(doctor.REINIT, doctor.reinit(sys.version_info[:2]))
+    def test_the_reinit_fix_runs_init_where_it_works_on_every_python(self):
+        """The fix named /opt's venv on 3.11+, given when /opt/tracekit was missing or writable by others (D-CODE-TRUST)
+        and on a dev host with no /opt (D-PROCESS-BOUNDARY), and the version from doctor's own Python; with Tracekit
+        only in /opt's venv the system Python's `-I` form found no module. Init from a root-owned clone works on every
+        Python and with or without /opt, as the plugin and CI run it."""
+        self.assertIn("from a root-owned clone of the release (docs/deploy.md#laptop-system-mode), "
+                      "sudo /usr/bin/python3 -m tracekit init --v2 --user <agent-user>", doctor.REINIT)
+        self.assertNotIn("/opt/tracekit", doctor.REINIT)
+        self.assertNotIn(" -I ", doctor.REINIT)   # -I leaves the clone out of the import path
 
 
 class K8s(unittest.TestCase):
