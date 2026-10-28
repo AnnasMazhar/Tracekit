@@ -423,11 +423,12 @@ class View(unittest.TestCase):
         feed = store_feed(self, {"data_dir": self.d})
         self.report(feed, run_id)
         with mock.patch.object(import_v2, "bundle_records", wraps=import_v2.bundle_records) as checked:
-            rows = feed.rows(observe.ALL, "default", run_id)
-            self.assertIs(feed.rows(observe.ALL, "default", run_id), rows)   # asked again: checked once
+            body = feed.rows(observe.ALL, "default", run_id)
+            self.assertIs(feed.rows(observe.ALL, "default", run_id), body)   # asked again: checked once
             other = self.finished_run()   # another run moves the log's checkpoint; this run's own records did not grow
-            self.assertIs(feed.rows(observe.ALL, "default", run_id), rows)
+            self.assertIs(feed.rows(observe.ALL, "default", run_id), body)
         self.assertEqual(checked.call_count, 1)
+        rows = json.loads(body)["rows"]
         self.assertEqual([r["tool_use_id"] for r in rows if r["event"] == "PreToolUse"], ["c1", "c2", "c3"])
         self.assertEqual({r["tenant"] for r in rows}, {"default"})
         self.assertIsNone(feed.rows("other", "default", run_id))   # an OIDC session of another tenant
@@ -446,6 +447,7 @@ class View(unittest.TestCase):
         c.request("GET", f"/api/rows?tenant=default&run={run_id}")
         self.assertEqual(c.getresponse().status, 401)
         # two checks at once at most: a third request is told to come back, not queued behind them
+        self.report(feed, other)   # the watcher verified it: its rows need a check
         feed.verifying = threading.BoundedSemaphore(1)
         feed.verifying.acquire()
         with self.assertRaises(observe.Busy):
@@ -467,7 +469,7 @@ class View(unittest.TestCase):
         self.service.close()
         feed.rowcache.clear()
         with mock.patch.object(view, "export", side_effect=export_then_edit):
-            rows = feed.rows(observe.ALL, "default", run_id)
+            rows = json.loads(feed.rows(observe.ALL, "default", run_id))["rows"]
         self.assertEqual([x["tool_name"] for x in rows if x["event"] == "PreToolUse"], ["Bash", "rm", "pay"])
         # a record edited after it was shown: the viewer's re-check fails it, and it is refused
         path = os.path.join(self.d, "store", "records.jsonl")
@@ -524,6 +526,32 @@ class View(unittest.TestCase):
         with mock.patch.object(view, "reader", side_effect=reader):
             self.assertIsNotNone(feed.rows(observe.ALL, *key))
         self.assertEqual(len(opened), 2)
+
+    def test_rows_reads_the_store_only_to_check_a_run_and_only_two_at_once(self):
+        """Every /api/rows request read the whole store (a reader opened before the cache and the two-at-once limit):
+        a cached answer, a made-up run id and a request refused as busy each cost a full read, so 32 requests at once
+        took 32."""
+        run_id = self.finished_run()
+        feed = store_feed(self, {"data_dir": self.d})
+        self.report(feed, run_id)
+        body = feed.rows(observe.ALL, "default", run_id)   # the check: one reader
+        opened, me, real = [], threading.get_ident(), view.reader
+
+        def reader(cfg):   # this thread's readers only: the watcher's own are its business
+            if threading.get_ident() == me:
+                opened.append(cfg)
+            return real(cfg)
+        with mock.patch.object(view, "reader", side_effect=reader):
+            self.assertIs(feed.rows(observe.ALL, "default", run_id), body)   # a hit: the same bytes, sent as they are
+            self.assertIsNone(feed.rows(observe.ALL, "default", "made-up"))
+            feed.rowcache.clear()
+            feed.verifying = threading.BoundedSemaphore(1)
+            feed.verifying.acquire()
+            with self.assertRaises(observe.Busy):
+                feed.rows(observe.ALL, "default", run_id)
+        self.assertEqual(opened, [])
+        self.assertEqual([r["tool_use_id"] for r in json.loads(body)["rows"] if r["event"] == "PreToolUse"],
+                         ["c1", "c2", "c3"])
 
     def test_with_a_content_source_each_decision_carries_its_arguments(self):
         """The tape named every allowed call "no rule matched": with the dev signer's retained arguments each decision

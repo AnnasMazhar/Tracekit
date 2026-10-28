@@ -1137,58 +1137,63 @@ class StoreFeed:
             self.base += over
 
     def rows(self, scope, tenant, run_id):
-        """GET /api/rows?tenant&run: a run's rows as the tape shows them, from the records of its bundle that verified
-        (exported from the store, verified, then translated: the file is read once), so a run whose records left the
-        live view opens in full; None when `scope` may not read its tenant, the store has no such run, no checkpoint
-        covers it or it fails. At most max_records records, its first. An answer is kept while the run's own covered
-        records don't change, or until the viewer's own re-check of the run fails it (RECHECK_S), as the run list's
-        verdict is. Two checks run at once at most: past that, observe.Busy (503, try again)."""
+        """GET /api/rows?tenant&run: the JSON body ({"rows": [...]}, UTF-8) of a run's rows as the tape shows them, from
+        the records of its bundle that verified (exported from the store, verified, then translated: the file is read
+        once), so a run whose records left the live view opens in full; None when `scope` may not read its tenant, the
+        watcher has not verified the run (no such run, no checkpoint covers it yet) or it fails. At most max_records
+        records, its first. An answer is kept while the run's own covered records don't change, or until the viewer's
+        own re-check of the run fails it (RECHECK_S), as the run list's verdict is. The watcher's state decides all
+        that with no read of the store; only a check reads it, two at once at most: past that, observe.Busy (503, try
+        again)."""
         from .why.import_v2 import bundle_records
         if scope is not observe.ALL and tenant != scope:
             return None
-        r = reader(self.cfg)
-        fd, out = tempfile.mkstemp(suffix=".tkb", dir=self.tmp)   # requests run concurrently: a file each
-        os.close(fd)
+        with self.lock:   # a run the watcher failed has no rows, whatever was kept (an edit keeps the count)
+            state = self.runs.get((tenant, run_id)) or {}
+            if not state.get("count") or state.get("failed"):
+                return None
+            body = self.rowcache.get((tenant, run_id, state["count"]))
+        if body is not None:
+            return body
+        if not self.verifying.acquire(blocking=False):
+            raise observe.Busy()
         try:
-            note = r.checkpoint_latest()
-            if note and note[0] > r.tree.size:   # a checkpoint written while it opened: read again, as refresh() does
-                r.close()
-                r = reader(self.cfg)
-            run = r.runs.get((tenant, run_id))
-            count = bisect.bisect_left(run["seqs"], note[0]) if run and note else 0
-            key = (tenant, run_id, count)   # its own covered records: another run's checkpoint costs it a lookup
-            with self.lock:   # a run the watcher failed has no rows, whatever was kept (an edit keeps the count)
-                if (self.runs.get(key[:2]) or {}).get("failed"):
-                    return None
-                rows = self.rowcache.get(key)
-            if rows is not None or not count:
-                return rows
-            if not self.verifying.acquire(blocking=False):
-                raise observe.Busy()
+            r = reader(self.cfg)
+            fd, out = tempfile.mkstemp(suffix=".tkb", dir=self.tmp)   # requests run concurrently: a file each
+            os.close(fd)
             try:
+                note = r.checkpoint_latest()
+                if note and note[0] > r.tree.size:   # a checkpoint written while it opened: read again, as refresh() does
+                    r.close()
+                    r = reader(self.cfg)
+                run = r.runs.get((tenant, run_id))
+                count = bisect.bisect_left(run["seqs"], note[0]) if run and note else 0
+                if not count:
+                    return None
                 export(r, tenant, run_id, note[1], out)
                 verified, _, code = bundle_records(out, self.trust)
             except ValueError:   # the store does not match its own checkpoint
                 return None
             finally:
-                self.verifying.release()
-            if code:
-                return None
-            # lean: the retained arguments are not read again (each read is a signed content.accessed record); the
-            # live view shows them
-            records = verified.get(run_id, [])[:self.max_records]
+                r.close()
+                os.unlink(out)
         finally:
-            r.close()
-            os.unlink(out)
+            self.verifying.release()
+        if code:
+            return None
+        # lean: the retained arguments are not read again (each read is a signed content.accessed record); the live
+        # view shows them
         tr = Translator(self.tr.reasons)
-        rows = [dict(x, tenant=tenant) for rec in records for x in tr.feed(rec)]
+        body = json.dumps({"rows": [dict(x, tenant=tenant) for rec in verified.get(run_id, [])[:self.max_records]
+                                    for x in tr.feed(rec)]}, ensure_ascii=False).encode("utf-8")
+        key = (tenant, run_id, count)   # its own covered records: another run's checkpoint costs it a lookup
         with self.lock:
             if (self.runs.get(key[:2]) or {}).get("failed"):   # the watcher failed it while this checked it
                 return None
-            self.rowcache[key] = rows
+            self.rowcache[key] = body   # serialized once: a hit sends these bytes as they are
             while len(self.rowcache) > ROWCACHE_MAX:
                 self.rowcache.popitem(last=False)
-        return rows
+        return body
 
     def verify(self, tenant=None):
         """For the page's chain badge: records verified, and the runs that failed (of `tenant`, else of all)."""

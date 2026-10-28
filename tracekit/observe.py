@@ -549,15 +549,15 @@ def make_handler(feed, token, allowed_hosts=None, secure=False, login=None, appr
                 if not (q.get("tenant") and q.get("run")):
                     return self._send(400, '{"error":"needs tenant and run"}')
                 try:
-                    rows = feed.rows(scope, q["tenant"], q["run"])
+                    body = feed.rows(scope, q["tenant"], q["run"])
                 except Busy:
                     return self._send(503, '{"error":"checking other runs: try again shortly"}',
                                       headers=[("Retry-After", "5")])
                 except (OSError, StorageUnavailable, StorageCorrupt):
                     return self._send(502, '{"error":"store unavailable"}')
-                if rows is None:
+                if body is None:
                     return self._send(404, '{"error":"no such verified run"}')
-                return self._send(200, json.dumps({"rows": rows}, ensure_ascii=False))
+                return self._send(200, body)
             if u.path == "/api/verify":
                 n, problems, head = feed.verify() if scope is ALL else feed.verify(scope)
                 return self._send(200, json.dumps({"records": n, "ok": not problems, "problems": problems, "head": head,
