@@ -123,7 +123,9 @@ what the person typed (`input.observed`, trusted, source `<agent>:UserPromptSubm
 input under its own source, so a value in it keeps its provenance: in Claude Code a paste block, a skill's body, a
 message from another session, agent or teammate, a task or system notification, a scheduled task, uploads and command
 output (`claude-code:paste`, `claude-code:task-notification`, ...); in Gemini CLI its referenced files block
-(`gemini-cli:referenced-file`). `tracekit analyze --v2` takes a prompt line of the transcript as the person's only when
+(`gemini-cli:referenced-file`). A whole Claude Code turn its payload says no person typed (a `source` other than `user`
+or `sdk`: a plugin's prompt, a notice, a wake-up or a poll event) is recorded that way too (`claude-code:poll_event`,
+...), and none of its constraints are live. `tracekit analyze --v2` takes a prompt line of the transcript as the person's only when
 the hook recorded the same typed text: a line the agent appended to its own transcript is flagged (TK-X208) and clears nothing. A
 paste or an image Claude Code writes as a placeholder (`[Pasted text #1 +40 lines]`) pairs with the hook's prompt that
 holds the rest of the line, whose full text is read; a hook prompt with no line (one the tailer missed) is read on its

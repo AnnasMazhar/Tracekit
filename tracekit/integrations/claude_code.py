@@ -26,18 +26,19 @@ content) from the transcript, which no hook payload carries. A later run of the 
 tailer start where the hook last saw the transcripts while the earlier run was open (_seen), and a resumed session's
 first run where its transcript ended at SessionStart: the lines before are an earlier run's.
 
-At UserPromptSubmit, the typed part of the harness's prompt is recorded (`observe`, source
-<agent>:UserPromptSubmit, trusted); harness-wrapped parts are separate untrusted observations. `tracekit analyze --v2`
-reads a transcript prompt line as the person's only when one of these has its typed text (TK-X208 flags a line none
-has). Each constraint the typed part states (tracekit.constraints: "don't touch X", "read-only", "don't push", ...), and
-each a wrapped part states whose wrapper follows other text on its line (midline_live), goes to the signer first, each
-on its own, as a live constraint (`constraint_add`), which holds a later call that breaks it for a person's approval;
-the agent reads why on stderr. A scope ("only change X") is no live constraint (_live): holding every other write
-(tests, lockfiles) would ask too often; `tracekit analyze --v2` checks it. The session state keeps them (written
-before they are sent, so an unreachable signer loses none), and a later run of the session (after an idle close) gets
-them all again. A constraint can only hold more calls, so the agent's own identity adding one (it could add its own)
-weakens nothing: past the signer's cap of file constraints a further one is refused and every write of the run is held
-from then on, which the hook tells the person (exit 1, FULL on stderr).
+At UserPromptSubmit, the typed part of the harness's prompt is recorded (`observe`, source <agent>:UserPromptSubmit,
+trusted); harness-wrapped parts are separate untrusted observations, and so is the whole of a turn Claude Code's payload
+says no person typed (a `source` other than user or sdk; recorded as <agent>:<source>). `tracekit analyze --v2` reads a
+transcript prompt line as the person's only when one of these has its typed text (TK-X208 flags a line none has). Each
+constraint the typed part states (tracekit.constraints: "don't touch X", "read-only", "don't push", ...), and each a
+wrapped part states whose wrapper follows other text on its line (midline_live), goes to the signer first, each on its
+own, as a live constraint (`constraint_add`), which holds a later call that breaks it for a person's approval; the agent
+reads why on stderr. A scope ("only change X") is no live constraint (_live): holding every other write (tests,
+lockfiles) would ask too often; `tracekit analyze --v2` checks it. The session state keeps them (written before they are
+sent, so an unreachable signer loses none), and a later run of the session (after an idle close) gets them all again. A
+constraint can only hold more calls, so the agent's own identity adding one (it could add its own) weakens nothing: past
+the signer's cap of file constraints a further one is refused and every write of the run is held from then on, which the
+hook tells the person (exit 1, FULL on stderr).
 
 System mode: the signer runs as its own user and the hook reaches it only through the socket the root-owned
 /etc/tracekit/client.json names (a TRACEKIT_SIGNER naming another is refused, and the call blocked); the signer
@@ -667,7 +668,12 @@ def _handle(client, p, event, sid, tid):
         _prune()
         transcript = p.get("transcript_path") if isinstance(p.get("transcript_path"), str) else None
     if isinstance(prompt, str) and prompt:   # the harness's submitted prompt, including harness wrappers
-        typed, wrapped = prompt_parts(prompt)
+        source = p.get("source") if AGENT == "claude-code" else None
+        if source in (None, "user", "sdk"):
+            typed, wrapped = prompt_parts(prompt)
+        else:   # a turn no person typed (system, loop_wakeup, schedule_wakeup, poll_event): untrusted as a whole
+            name = source if isinstance(source, str) and re.fullmatch(r"[a-z_]{1,64}", source) else "non-user"
+            typed, wrapped = "", [(name, prompt, 0)]
         stated = [*dict.fromkeys(_live(typed) + (midline_live(prompt, wrapped) if AGENT == "claude-code" else []))]
         live = set(stated)
         unexpected = {}
