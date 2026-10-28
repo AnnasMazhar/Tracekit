@@ -479,16 +479,18 @@ def _wrapped(agent):
 
 
 def prompt_parts(prompt, agent=None):
-    """Return (person-typed text, [(source, untrusted text)]) from a harness prompt."""
+    """Return (person-typed text, [(source, untrusted text, start)]) from a harness prompt. A wrapper other than a
+    closed paste makes the rest of the prompt untrusted; one that follows other text on its line (_midline) is a part
+    only up to the next wrapper that starts a line, where the next part (to the end) begins."""
     agent = AGENT if agent is None else agent
-    typed, parts, pos = [], [], 0
+    typed, parts, pos, rest = [], [], 0, False   # rest: all from pos on is untrusted, past a mid-line wrapper's part
     wrapped = _wrapped(agent)
     while match := wrapped.search(prompt, pos):
         start = match.start()
         tag = (match.group(2) if match.lastindex and match.lastindex >= 2 else "") or ""
         tag = tag.lower()
         typed.append(prompt[pos:start])
-        ident = match.group(1) if match.lastindex else None
+        ident = match.group(1) if match.lastindex and not rest else None
         if ident:
             # Claude Code's scrub prevents a pasted body or typed text from forging its 16-bit session-shared id.
             close = f'</pasted_content id="{ident}">'
@@ -516,6 +518,13 @@ def prompt_parts(prompt, agent=None):
             source = "non-user-message"
         else:
             source = "scheduled-task" if match.group(0).lower().startswith("[scheduled") else "system-notification"
+        if not rest and _midline(prompt, start):   # a name the person typed: harness text after it starts a line
+            pos = next((m.start() for m in wrapped.finditer(prompt, match.end()) if not _midline(prompt, m.start())),
+                       None)
+            if pos is not None:
+                parts.append((source, prompt[start:pos], start))
+                rest = True
+                continue
         parts.append((source, prompt[start:], start))
         break
     else:

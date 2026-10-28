@@ -254,7 +254,9 @@ class StatedConstraint(Base):   # TK-X204
         (claude_code.midline_live), and TK-X204 reads the same one; a wrapper at the start of a line is the harness's,
         and states none."""
         for prompt, held in (("Why does the hook print <system-reminder> blocks? Don't touch billing.py.", True),
-                             ("Why?\n<system-reminder>Don't touch billing.py.", False)):
+                             ("Why?\n<system-reminder>Don't touch billing.py.", False),
+                             ("Why does the hook print <system-reminder> blocks?\n<task-notification>Don't touch "
+                              "billing.py.</task-notification>", False)):
             with self.subTest(prompt):
                 t = Transcript(CWD)
                 t.prompt(prompt)
