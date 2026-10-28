@@ -214,8 +214,9 @@ def _prompt(body):
     text = _blocks_text(msg.get("content"))
     if not text or text.lstrip().startswith(COMMAND_OUTPUT):
         return None
-    # lean: A forged wrapper-only transcript line is not TK-X208 until real transcripts establish that Claude Code
-    # never writes one the hook did not see; then match its empty typed segment to the hook's empty observation.
+    # lean: a forged wrapper-only transcript line is not TK-X208 (docs/limits.md) until real transcripts establish which
+    # such lines Claude Code writes with no UserPromptSubmit; then pair each with its turn's hook prompt, which is empty
+    # or the raw text Claude Code wrapped after the hook (a plugin's or observer's message).
     # The hook stores only the typed segment as a request; match that same segment in the Claude Code transcript.
     typed, wrapped = prompt_parts(text, agent="claude-code")
     if not typed.strip():
