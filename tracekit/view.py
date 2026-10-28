@@ -1329,7 +1329,8 @@ class Runs:
         it and it verified, else []. With `cached` False, checked on `r` whatever the cache holds (the caller holds a
         check slot). A kept verdict is checked again RECHECK_S after its check, as StoreFeed's are, so an edit of a run's
         records in place shows in the list. A list checks with the list's own slot (self.listing), so a run page always
-        has one of its two; with that slot taken it shows the kept verdict, or NOT CHECKED for a run with none."""
+        has one of its two; with that slot taken it shows FAILED as it is and NOT CHECKED for the rest (a run never
+        checked, or a VERIFIED that is past due): an edit since must not read VERIFIED."""
         run, records = r.runs.get((tenant, run_id)), []
         if run is None:
             return None, records
@@ -1341,9 +1342,10 @@ class Runs:
             v, at = self._verdicts.get(key, (None, 0)) if cached else (None, 0)
         if v is None or time.time() >= at + RECHECK_S:
             if cached and not self.listing.acquire(blocking=False):
-                return v or {"verdict": "pending", "integrity": "NOT CHECKED", "assurance": "none",
-                             "label": OPERATOR_SIDE, "report": "Not checked yet: the viewer is checking other runs. "
-                                                               "Open the run to check it."}, records
+                return v if v and v["verdict"] == "failed" else {
+                    "verdict": "pending", "integrity": "NOT CHECKED", "assurance": "none", "label": OPERATOR_SIDE,
+                    "report": f"Not checked in the last {RECHECK_S // 60} minutes: the viewer is checking other "
+                              "runs. Open the run to check it."}, records
             try:
                 if cached:   # another list may have checked it since
                     with self._lock:

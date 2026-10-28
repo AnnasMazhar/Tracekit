@@ -189,7 +189,7 @@ class CentralViewer(unittest.TestCase):
 
     def test_a_list_checks_a_run_only_with_a_check_slot_free(self):
         """A list checked every run whose verdict was old or missing, with no limit: 16 lists at once made 91 checks of
-        6 runs. With the list's check slot taken it checks none: a kept verdict shows as it is, a run never checked as
+        6 runs. With the list's check slot taken it checks none: a past-due VERIFIED, and a run never checked, show as
         NOT CHECKED."""
         def listed(port):
             runs = json.loads(self.get("/api/runs", self.admin, port)[2])["runs"]
@@ -202,9 +202,31 @@ class CentralViewer(unittest.TestCase):
             r.listing.acquire()
         with mock.patch.object(view, "check", wraps=view.check) as checked, \
                 mock.patch.object(view.time, "time", return_value=time.time() + view.RECHECK_S + 1):
-            self.assertEqual(listed(port), kept)
+            self.assertEqual(listed(port), dict.fromkeys(kept, "NOT CHECKED"))
             self.assertEqual(listed(fresh_port), dict.fromkeys(kept, "NOT CHECKED"))
         self.assertEqual(checked.call_count, 0)
+
+    @pytest.mark.unverified_bundles
+    def test_a_list_that_cannot_check_never_shows_a_past_due_verified(self):
+        """With the list's check slot taken, a VERIFIED past RECHECK_S still showed VERIFIED after the run's records
+        were edited in place. It reads NOT CHECKED; a kept FAILED stays FAILED, and one within RECHECK_S shows as is."""
+        runs = view.Runs(self.files)
+        port, t0 = self.serve(runs), time.time()
+
+        def a2(now):
+            with mock.patch.object(view.time, "time", return_value=now):
+                listed = json.loads(self.get("/api/runs", self.admin, port)[2])["runs"]
+            return next(r["verdict"]["integrity"] for r in listed if r["run_id"] == self.ids["a2"])
+        self.assertEqual(a2(t0), "VERIFIED")
+        pg.sql(self.admin1, "UPDATE tracekit_records SET record = regexp_replace(record::text, '\"tool\": ?\"Bash\"', "
+               "'\"tool\":\"Bosh\"')::json WHERE run_id = %s", (self.ids["a2"],))
+        runs.listing.acquire()
+        self.assertEqual(a2(t0), "VERIFIED")   # within RECHECK_S: the kept verdict
+        self.assertEqual(a2(t0 + view.RECHECK_S + 1), "NOT CHECKED")   # past due and not checked again: not VERIFIED
+        runs.listing.release()
+        self.assertEqual(a2(t0 + view.RECHECK_S + 1), "FAILED")
+        runs.listing.acquire()
+        self.assertEqual(a2(t0 + 3 * view.RECHECK_S), "FAILED")
 
     def test_a_run_page_has_a_check_slot_while_lists_check_and_two_lists_check_a_run_once(self):
         """Lists took the run pages' two check slots: during two lists that were checking, a run page got 503 on every
