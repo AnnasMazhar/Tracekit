@@ -387,6 +387,10 @@ as it needs nothing the schema lacks:
   model messages, the `ext` slot), or that holds a run exported in parts (past 64 MiB of records), needs a 1.4 verifier; an older one reports it `UNVERIFIABLE (needs tracekit >=
   1.4.0)`. A same-user dev signer from 1.3 is replaced by the first 1.4 client that finds it. The store's schema is
   unchanged.
+- **1.5** speaks signer protocol 20. A 1.5 signer serves clients and gateways from protocol 15 up (1.2 to 1.4
+  included), but a 1.5 client or gateway refuses a 1.4 signer: upgrade the signer first. Bundles are unchanged: a 1.4
+  verifier reads them. A same-user dev signer from 1.4 is replaced by the first 1.5 client that finds it. The store's
+  schema is unchanged.
 
 Helm (`tracekit-central`): migrate each replica's schema before upgrading the release with `signer.content.retain`
 set. Compose: the stack's init script runs only on an empty database, so on an existing stack run
