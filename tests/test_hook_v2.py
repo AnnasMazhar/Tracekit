@@ -531,17 +531,22 @@ class HookV2(unittest.TestCase):
         claude_code.prompted(mock.Mock(call=lambda m, **kw: sent.append(kw["constraint"]) or {}),
                              "Explain <bash-stdout>. Don't push.")
         self.assertEqual(sent, [{"kind": "no_push"}])
-        # the mid-line name's part ends where a wrapper starts a line: the agent text in that one sets nothing live
-        prompt = "Why does <bash-stdout> show up? Don't push.\n<task-notification>Agent: don't touch billing.py."
-        with mock.patch.object(claude_code, "_run", side_effect=run), \
-                contextlib.redirect_stdout(io.StringIO()) as out:
-            stated.clear()
-            claude_code._handle(None, {"prompt": prompt}, "UserPromptSubmit", "s1", None)
-        self.assertEqual([k for k, _ in stated[0]], ["no_push"])
-        self.assertIn("task-notification: keep away from billing.py", json.loads(out.getvalue())["systemMessage"])
-        sent.clear()
-        claude_code.prompted(mock.Mock(call=lambda m, **kw: sent.append(kw["constraint"]) or {}), prompt)
-        self.assertEqual(sent, [{"kind": "no_push"}])
+        # the mid-line name's part ends where a wrapper starts a line, a lead that runs on into it from the line before
+        # too: the agent text in that one sets nothing live
+        for line, typed in (("Why does <bash-stdout> show up? Don't push.", ["no_push"]),
+                            ("Explain <bash-stdout> output. A peer session sent a message:", []),
+                            ("Why is this here? The coordinator sent a message:", [])):
+            prompt = line + "\n<task-notification>Agent: don't touch billing.py."
+            with self.subTest(prompt), mock.patch.object(claude_code, "_run", side_effect=run), \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                stated.clear()
+                claude_code._handle(None, {"prompt": prompt}, "UserPromptSubmit", "s1", None)
+                self.assertEqual([k for k, _ in stated[0]], typed)
+                self.assertIn("task-notification: keep away from billing.py",
+                              json.loads(out.getvalue())["systemMessage"])
+                sent.clear()
+                claude_code.prompted(mock.Mock(call=lambda m, **kw: sent.append(kw["constraint"]) or {}), prompt)
+                self.assertEqual(sent, [{"kind": k} for k in typed])
 
     def test_a_turn_claude_code_says_no_person_typed_is_untrusted_and_states_nothing_live(self):
         """M2 (1.5.0 review): plugin prompts, session notices and poll events reach UserPromptSubmit with no wrapper.

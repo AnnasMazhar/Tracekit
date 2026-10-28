@@ -385,6 +385,9 @@ def _live(prompt):
     return [(kind, obj and obj[:256]) for kind, obj in constraints.extract(prompt) if kind != "only_change"]
 
 
+_LINE_START = re.compile(r"\n[^\S\n]*")   # where a line's text starts, as _midline reads it
+
+
 def _midline(prompt, start):
     """Whether the wrapper prompt_parts found at `start` follows other text on its line. Claude Code puts its own at the
     start of a line (the ultraplan handoff's sentence aside, _states)."""
@@ -525,8 +528,9 @@ def prompt_parts(prompt, agent=None):
             source = "scheduled-task" if match.group(0).lower().startswith("[scheduled") else "system-notification"
         if not rest and _midline(prompt, start) and not _handoff(prompt, source, start):   # a name the person typed:
             # harness text after it starts a line
-            pos = next((m.start() for m in wrapped.finditer(prompt, match.end()) if not _midline(prompt, m.start())),
-                       None)
+            # each line start in turn: a lead at the end of the person's line ("... sent a message:") would run on into
+            # the wrapper on the next one, which a search for whole matches would then skip
+            pos = next((n.end() for n in _LINE_START.finditer(prompt, start) if wrapped.match(prompt, n.end())), None)
             if pos is not None:
                 parts.append((source, prompt[start:pos], start))
                 rest = True

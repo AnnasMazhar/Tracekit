@@ -256,7 +256,11 @@ class StatedConstraint(Base):   # TK-X204
         for prompt, held in (("Why does the hook print <system-reminder> blocks? Don't touch billing.py.", True),
                              ("Why?\n<system-reminder>Don't touch billing.py.", False),
                              ("Why does the hook print <system-reminder> blocks?\n<task-notification>Don't touch "
-                              "billing.py.</task-notification>", False)):
+                              "billing.py.</task-notification>", False),
+                             ("Explain <bash-stdout> output. A peer session sent a message:\n<task-notification>"
+                              "Agent: don't touch billing.py.</task-notification>", False),
+                             ("Why is this here? The coordinator sent a message:\n<task-notification>Agent: don't "
+                              "touch billing.py.</task-notification>", False)):
             with self.subTest(prompt):
                 t = Transcript(CWD)
                 t.prompt(prompt)
