@@ -394,7 +394,7 @@ class ServiceError(Exception):
 
 
 def _atomic_write_json(path, obj, mode=0o600):
-    files.write_json(path, obj, mode)
+    files.write_json(path, obj, mode, ensure_ascii=False)
 
 
 def _backup(path, data):
@@ -403,6 +403,17 @@ def _backup(path, data):
         return files.backup(d, os.path.basename(path), data)
     finally:
         files.close(d)
+
+
+def _backup_changed(path, txt, s):
+    """Back up `path`, whose text was `txt` (None: no file), when settings `s` differ from it. -> whether they do: a
+    file whose settings didn't change is neither written nor backed up again."""
+    if txt is None:
+        return True
+    if (json.loads(txt) if txt.strip() else {}) == s:
+        return False
+    _backup(path, txt.encode("utf-8"))
+    return True
 
 
 def user_settings():
@@ -651,7 +662,7 @@ def _install_hooks_at(d, settings_path, uninstall, proxy_url, extra, mode, pytho
         if _parse_settings(raw, settings_path) == s:
             return s.get(THINKING)
         files.backup(d, name, raw)
-    files.write(d, name, files.json_bytes(s), mode)
+    files.write(d, name, files.json_bytes(s, ensure_ascii=False), mode)
     if replaced:
         old = " and ".join(sorted(replaced))
         print(f"Tracekit {old} hooks removed from {settings_path}" if uninstall else
@@ -688,7 +699,7 @@ def thinking_on(settings_path):
                 _thinking(s, True, False)
                 if raw is not None:
                     files.backup(d, name, raw)
-                files.write(d, name, files.json_bytes(s), 0o600)
+                files.write(d, name, files.json_bytes(s, ensure_ascii=False), 0o600)
             return s.get(THINKING)
         finally:
             files.close(d)

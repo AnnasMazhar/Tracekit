@@ -655,14 +655,15 @@ def _install_opencode(path, uninstall=False, v2=False, python=None):
             if raw is not None and OPENCODE_MARKER not in text:
                 raise SettingsError(f"{path} is not Tracekit's plugin; Tracekit did not change it.")
             old = _version(text)
-            if raw is not None:
+            plugin = None if uninstall else _opencode_plugin(python, v2).encode("utf-8")
+            if raw not in (None, plugin):
                 files.backup(d, name, raw)
             if uninstall:
                 if raw is not None:
                     target = name if isinstance(d, int) else path
                     os.unlink(target, **({"dir_fd": d} if isinstance(d, int) else {}))
-            else:
-                files.write(d, name, _opencode_plugin(python, v2).encode("utf-8"), 0o600)
+            elif raw != plugin:
+                files.write(d, name, plugin, 0o600)
         finally:
             files.close(d)
     except (files.UnsafePath, OSError) as e:
@@ -683,7 +684,7 @@ def _install_goose(path, uninstall=False, v2=False, python=None):
     """Install one owned goose plugin without overwriting a plugin that is not Tracekit's. goose runs a rule with no
     matcher for every tool (a bare "*" matcher is an invalid regex goose silently skips), its timeout is in seconds,
     and only a PreToolUse action carries on_failure: block."""
-    from .install import SettingsError, _atomic_write_json, _backup, _hook_command
+    from .install import SettingsError, _atomic_write_json, _backup_changed, _hook_command
     path = os.path.abspath(path)
     plugin_dir = os.path.dirname(os.path.dirname(path))   # <plugin>/hooks/hooks.json
     manifest = os.path.join(plugin_dir, "plugin.json")
@@ -697,7 +698,7 @@ def _install_goose(path, uninstall=False, v2=False, python=None):
             raise SettingsError(f"{manifest} is not valid JSON ({e}); Tracekit did not change it.") from e
         if not isinstance(owned, dict) or owned.get("name") != "tracekit":
             raise SettingsError(f"{manifest} is not Tracekit's plugin; Tracekit did not change it.")
-    s, txt = {}, ""
+    s, txt = {}, None
     if os.path.exists(path):
         try:
             with open(path, encoding="utf-8") as f:
@@ -707,7 +708,6 @@ def _install_goose(path, uninstall=False, v2=False, python=None):
             raise SettingsError(f"{path} is not valid JSON ({e}); Tracekit did not change it.") from e
         if not isinstance(s, dict):
             raise SettingsError(f"{path} must contain a JSON object; Tracekit did not change it.")
-        _backup(path, txt.encode("utf-8"))
     hooks = s.get("hooks", {})
     if not isinstance(hooks, dict):
         raise SettingsError(f"'hooks' in {path} must be an object; Tracekit did not change it.")
@@ -740,6 +740,7 @@ def _install_goose(path, uninstall=False, v2=False, python=None):
         s["hooks"] = hooks
     else:
         s.pop("hooks", None)
+    changed = _backup_changed(path, txt, s)
     if uninstall and not s:
         # the only content was Tracekit's hooks: remove the plugin's files, not other content (a file with other
         # keys falls through to the write below, and its manifest stays)
@@ -755,7 +756,8 @@ def _install_goose(path, uninstall=False, v2=False, python=None):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if not os.path.exists(manifest):
             _atomic_write_json(manifest, GOOSE_PLUGIN)
-    _atomic_write_json(path, s)
+    if changed:
+        _atomic_write_json(path, s)
     old = " and ".join(sorted(removed if uninstall else removed - {new}))
     if old:
         print(f"Tracekit {old} hooks removed from {path}" if uninstall else f"Tracekit {old} hooks replaced by {new} hooks in {path}")
@@ -765,7 +767,7 @@ def _install_goose(path, uninstall=False, v2=False, python=None):
 def install(harness, project=None, uninstall=False, v2=False, python=None, path=None):
     """Add (or remove) Tracekit's hooks, v1 or the v2 hook (python: see install._hook_command), in the harness's
     config file (path, or config_path), replacing those of the other version. -> the file's path."""
-    from .install import SettingsError, _atomic_write_json, _backup, _hook_command
+    from .install import SettingsError, _atomic_write_json, _backup_changed, _hook_command
     path = path or config_path(harness, project)
     if harness == "opencode":
         return _install_opencode(path, uninstall, v2, python)
@@ -779,7 +781,7 @@ def install(harness, project=None, uninstall=False, v2=False, python=None, path=
             raise SettingsError(f"{legacy} is Droid's legacy hooks file: save once in Droid's /hooks so Droid moves it "
                                 f"to {path}, then run init again. Tracekit did not change it.")
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    s = {}
+    s, txt = {}, None
     if os.path.exists(path):
         try:
             with open(path, encoding="utf-8") as f:
@@ -789,7 +791,6 @@ def install(harness, project=None, uninstall=False, v2=False, python=None, path=
             raise SettingsError(f"{path} is not valid JSON ({e}); Tracekit did not change it.") from e
         if not isinstance(s, dict):
             raise SettingsError(f"{path} must contain a JSON object; Tracekit did not change it.")
-        _backup(path, txt.encode("utf-8"))
     if harness == "droid" and not uninstall and not os.path.exists(path):
         settings = os.path.join(os.path.dirname(path), "settings.json")
         if os.path.exists(settings):
@@ -880,9 +881,10 @@ def install(harness, project=None, uninstall=False, v2=False, python=None, path=
             s.pop(key)
     if not hooks and harness != "droid":
         s.pop(key, None)
+    changed = _backup_changed(path, txt, s)
     if uninstall and harness == "droid" and not s:
         os.unlink(path)
-    else:
+    elif changed:
         _atomic_write_json(path, s)
     if uninstall and harness == "codex":   # init's reasoning summaries line goes with its hooks
         try:

@@ -156,6 +156,36 @@ class HookOwnership(unittest.TestCase):
                                                           "Stop": [stop]}})
 
 
+class HarnessFileWrites(unittest.TestCase):
+    def test_non_ascii_stays_utf8_and_an_init_that_changes_nothing_writes_nothing(self):
+        """Init wrote a person's non-ASCII text as \\u escapes, and each coding agent's file but Claude Code's was
+        backed up by every init, even one that changed nothing."""
+        from tracekit import agent_hooks
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        theme = "Café 日本"
+        for harness in ("claude", *agent_hooks.HARNESSES):
+            with self.subTest(harness):
+                home = os.path.join(d, harness)
+                path = os.path.join(home, ".claude", "settings.json") if harness == "claude" else \
+                    agent_hooks.config_path(harness, home=home)
+                os.makedirs(os.path.dirname(path))
+                theirs = harness not in ("goose", "opencode")   # those two files are Tracekit's own plugin
+                if theirs:
+                    with open(path, "w", encoding="utf-8") as f:
+                        json.dump({"theme": theme}, f, ensure_ascii=False)
+                init = (lambda: install.install_hooks(path, module=install.V2_HOOK)) if harness == "claude" else \
+                    (lambda: agent_hooks.install(harness, v2=True, path=path))
+                with contextlib.redirect_stdout(io.StringIO()):
+                    init()
+                    files_then = sorted(os.listdir(os.path.dirname(path)))
+                    init()
+                self.assertEqual(sorted(os.listdir(os.path.dirname(path))), files_then)   # no new backup
+                if theirs:
+                    with open(path, "rb") as f:
+                        self.assertIn(theme.encode("utf-8"), f.read())
+
+
 @unittest.skipUnless(CAN_SYMLINK, "needs symlinks")
 class SignerConfig(_Sentinel, unittest.TestCase):
     def test_symlinked_signer_config_is_refused(self):
