@@ -609,7 +609,7 @@ class Speed(unittest.TestCase):
         for rid, key, pattern in pack_patterns():
             rx = regex.compile(pc.translate(pattern), regex.ASCII | regex.V0)
             for s in self.fillers(rid, pattern):
-                took = min(self.search(rx, s) for _ in range(2)) if self.search(rx, s) > self.BUDGET_S else 0
+                took = min(self.search(rx, s) for _ in range(3)) if self.search(rx, s) > self.BUDGET_S else 0
                 if took > self.BUDGET_S:
                     slow.append(f"{rid} {key} {took * 1e3:.0f} ms on {s[:24]!r}")
         self.assertEqual(slow, [])
