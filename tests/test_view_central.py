@@ -187,6 +187,19 @@ class CentralViewer(unittest.TestCase):
         with mock.patch.object(view.time, "time", return_value=time.time() + view.RECHECK_S + 1):
             self.assertEqual(self.listed("?verdict=failed", self.acme), ["a2"])
 
+    def test_a_run_page_checks_two_runs_at_once_at_most(self):
+        """Each /api/run request read the log and exported and verified its run with no limit: 16 at once made 16 full
+        checks."""
+        runs = view.Runs(self.files)
+        port = self.serve(runs)
+        a1 = f"/api/run?log=0&tenant=acme&run={self.ids['a1']}"
+        runs.verifying = threading.BoundedSemaphore(1)
+        runs.verifying.acquire()
+        status, r, _ = self.get(a1, self.acme, port)
+        self.assertEqual((status, r.getheader("Retry-After")), (503, "5"))
+        runs.verifying.release()
+        self.assertEqual(self.get(a1, self.acme, port)[0], 200)
+
     def test_downloaded_bundle_verifies_offline(self):
         status, r, data = self.get(f"/api/bundle?log=0&tenant=acme&run={self.ids['a1']}", self.acme)
         self.assertEqual(status, 200)

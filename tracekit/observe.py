@@ -579,6 +579,9 @@ def make_handler(feed, token, allowed_hosts=None, secure=False, login=None, appr
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
             try:
                 out = {"/api/runs": runs.search, "/api/run": runs.run, "/api/bundle": runs.bundle}[u.path](scope, q)
+            except Busy:
+                return self._send(503, '{"error":"checking other runs: try again shortly"}',
+                                  headers=[("Retry-After", "5")])
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
             except (OSError, StorageUnavailable, StorageCorrupt):

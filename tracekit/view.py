@@ -1285,6 +1285,7 @@ class Runs:
             checkpoint.parse_vkey(vkey)
             self.logs.append((dsn, write_trust(os.path.join(self.tmp, f"trust-{i}.json"), [vkey])))
         self._lock, self._verdicts = threading.Lock(), collections.OrderedDict()
+        self.verifying = threading.BoundedSemaphore(2)   # /api/run checks at once
 
     def _open(self, i):
         """A reader of log `i` and its latest record note (size, note), or None: the reader holds what the note
@@ -1369,7 +1370,8 @@ class Runs:
     def run(self, scope, q):
         """GET /api/run?log&tenant&run&from: the run's verdict with its report and, only when it verified, RECORDS_PAGE
         of its records from the `from`th, and the `from` of the next page or None; None when `scope` may not read the
-        run or there is no such run."""
+        run or there is no such run. Each request reads the log and checks the run, two at once at most: past that,
+        observe.Busy (503, try again)."""
         key = self._key(scope, q)
         start = q.get("from", "0")
         if not start.isdecimal():
@@ -1378,15 +1380,20 @@ class Runs:
             return None
         i, tenant, run_id = key
         start = int(start)
-        r, note = self._open(i)
+        if not self.verifying.acquire(blocking=False):
+            raise observe.Busy()
         try:
-            v = self._verdict(r, i, note, tenant, run_id, cached=False)   # the records served are the ones checked
-            if v is None:
-                return None
-            records = list(itertools.islice(r.iter_run(tenant, run_id), start, start + RECORDS_PAGE)) \
-                if v["verdict"] == "verified" else []
+            r, note = self._open(i)
+            try:
+                v = self._verdict(r, i, note, tenant, run_id, cached=False)   # the records served are the ones checked
+                if v is None:
+                    return None
+                records = list(itertools.islice(r.iter_run(tenant, run_id), start, start + RECORDS_PAGE)) \
+                    if v["verdict"] == "verified" else []
+            finally:
+                r.close()
         finally:
-            r.close()
+            self.verifying.release()
         return {"log": i, "tenant": tenant, "run_id": run_id, "verdict": v, "records": records,
                 "next": start + RECORDS_PAGE if len(records) == RECORDS_PAGE else None}
 
