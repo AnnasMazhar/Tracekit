@@ -139,6 +139,9 @@ bundle verifies with the 1.4.2 verifier too, which lists PCM records as not inte
 - **`tracekit approvals list --json` and `tracekit approvals show ID --json` (#425, by @Parth-Jadhav-2004).** `list`
   prints every page as one JSON array (`[]` when there are none), `show` one object with the redacted arguments
   decoded and no pager. The text output is unchanged.
+- **`tracekit demo --agent goose` and `--agent opencode` (#465, by @FTFaruque).** The scripted demo is sent as those
+  agents' own hook payloads through the command `tracekit init --agent NAME` installs; they send no session or prompt
+  events, so the demo says so and records none.
 
 ### Changed
 - **`tracekit view` has a new layout (#452).** Its pages are DESK, RUNS, LIVE, APPROVALS, PERMISSIONS and HORIZON, plus
