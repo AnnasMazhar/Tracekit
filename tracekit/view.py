@@ -1308,11 +1308,12 @@ class Runs:
         self.listing = threading.BoundedSemaphore(1)     # run lists' checks: one at a time, never a run page's slot
 
     def _open(self, i):
-        """A reader of log `i` and its latest record note (size, note), or None: the reader holds what the note
-        covers."""
+        """A reader of log `i`, its latest record note (size, note) or None, and the time before the reader took its
+        snapshot, which a verdict checked on it is as of: the reader holds what the note covers."""
+        at = time.time()
         r = self.pg.PostgresReader(self.logs[i][0])
         try:
-            return r, r.checkpoint_latest()
+            return r, r.checkpoint_latest(), at
         except BaseException:
             r.close()
             raise
@@ -1323,14 +1324,16 @@ class Runs:
             raise ValueError("needs log (a log number), tenant and run")
         return (int(q["log"]), q["tenant"], q["run"]) if scope is observe.ALL or q["tenant"] == scope else None
 
-    def _verdict(self, r, i, note, tenant, run_id, cached=True):
+    def _verdict(self, r, i, note, at, tenant, run_id, cached=True):
         """({verdict (VERDICTS), integrity, assurance, label, report}, records) of the run in reader `r` of log `i`, or
         (None, []) when it holds no such run; `records`: the run's records as verify.v2 read them when this call checked
         it and it verified, else []. With `cached` False, checked on `r` whatever the cache holds (the caller holds a
         check slot). A kept verdict is checked again RECHECK_S after its check, as StoreFeed's are, so an edit of a run's
         records in place shows in the list. A list checks with the list's own slot (self.listing), so a run page always
         has one of its two; with that slot taken it shows FAILED as it is and NOT CHECKED for the rest (a run never
-        checked, or a VERIFIED that is past due): an edit since must not read VERIFIED."""
+        checked, or a VERIFIED that is past due): an edit since must not read VERIFIED. A verdict is kept as of `at`,
+        when `r` took its snapshot, and never over one of a later snapshot: a list's check of a run edited since it
+        began must not put VERIFIED back over the FAILED its run page found."""
         run, records = r.runs.get((tenant, run_id)), []
         if run is None:
             return None, records
@@ -1339,8 +1342,8 @@ class Runs:
                     "report": "No checkpoint covers the run's last record yet."}, records
         key = (i, tenant, run_id, len(run["seqs"]))
         with self._lock:
-            v, at = self._verdicts.get(key, (None, 0)) if cached else (None, 0)
-        if v is None or time.time() >= at + RECHECK_S:
+            v, kept = self._verdicts.get(key, (None, 0)) if cached else (None, 0)
+        if v is None or time.time() >= kept + RECHECK_S:
             if cached and not self.listing.acquire(blocking=False):
                 return v if v and v["verdict"] == "failed" else {
                     "verdict": "pending", "integrity": "NOT CHECKED", "assurance": "none", "label": OPERATOR_SIDE,
@@ -1349,8 +1352,8 @@ class Runs:
             try:
                 if cached:   # another list may have checked it since
                     with self._lock:
-                        v, at = self._verdicts.get(key, (None, 0))
-                if v is None or time.time() >= at + RECHECK_S:
+                        v, kept = self._verdicts.get(key, (None, 0))
+                if v is None or time.time() >= kept + RECHECK_S:
                     fd, out = tempfile.mkstemp(suffix=".tkb", dir=self.tmp)   # requests run concurrently: a file each
                     os.close(fd)
                     try:
@@ -1360,7 +1363,8 @@ class Runs:
                     v = {"verdict": "failed" if code else "verified", "integrity": rep.integrity,
                          "assurance": rep.assurance.split(";")[0], "label": OPERATOR_SIDE, "report": text}
                     with self._lock:
-                        self._verdicts[key] = v, time.time()
+                        if self._verdicts.get(key, (None, 0))[1] <= at:
+                            self._verdicts[key] = v, at
                         while len(self._verdicts) > VERDICTS_MAX:
                             self._verdicts.popitem(last=False)
             finally:
@@ -1392,10 +1396,10 @@ class Runs:
             rows = self.pg.search_runs(self.logs[i][0], tenant, want, before, **filters)
             before = None
             if rows:
-                r, note = self._open(i)
+                r, note, at = self._open(i)
                 try:
                     for row in rows:
-                        v = self._verdict(r, i, note, row["tenant"], row["run_id"])[0]
+                        v = self._verdict(r, i, note, at, row["tenant"], row["run_id"])[0]
                         if v and q.get("verdict", v["verdict"]) == v["verdict"]:
                             out.append({"log": i, **row, "verdict": {k: v[k] for k in v if k != "report"}})
                 finally:
@@ -1420,9 +1424,9 @@ class Runs:
         if not self.verifying.acquire(blocking=False):
             raise observe.Busy()
         try:
-            r, note = self._open(i)
+            r, note, at = self._open(i)
             try:
-                v, checked = self._verdict(r, i, note, tenant, run_id, cached=False)
+                v, checked = self._verdict(r, i, note, at, tenant, run_id, cached=False)
                 if v is None:
                     return None
                 records = checked[start:start + RECORDS_PAGE]   # the records the check verified, never a second read
@@ -1447,7 +1451,7 @@ class Runs:
             fd, out = tempfile.mkstemp(suffix=".tkb", dir=self.tmp)
             os.close(fd)
             try:
-                r, note = self._open(i)
+                r, note, _ = self._open(i)
                 try:
                     run = r.runs.get((tenant, run_id))
                     if run is None or not note or run["seqs"][-1] >= note[0]:

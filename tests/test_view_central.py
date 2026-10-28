@@ -228,9 +228,9 @@ class CentralViewer(unittest.TestCase):
         runs.listing.acquire()
         self.assertEqual(a2(t0 + 3 * view.RECHECK_S), "FAILED")
 
-    def test_a_run_page_has_a_check_slot_while_lists_check_and_two_lists_check_a_run_once(self):
+    def test_a_run_page_has_a_check_slot_while_lists_check(self):
         """Lists took the run pages' two check slots: during two lists that were checking, a run page got 503 on every
-        try (runs.html doesn't try again), and the two lists checked the same runs twice (14 checks for 7 runs)."""
+        try (runs.html doesn't try again)."""
         runs = view.Runs(self.files)
         port = self.serve(runs)
         real, gate, entered, hold = view.check, threading.Event(), [], [True]
@@ -250,9 +250,50 @@ class CentralViewer(unittest.TestCase):
             gate.set()
             for t in lists:
                 t.join(20)
-        listed = entered[:1] + entered[2:]   # the run page's check is the second
-        self.assertEqual(sorted(listed), sorted(set(listed)))   # each run checked once
-        self.assertLessEqual(set(self.ids.values()), {run_id for run_id, _ in entered})   # a1's too: the page's verdict
+
+    def test_two_lists_with_a_free_slot_each_check_each_run_once(self):
+        """Two lists checked the same runs twice (14 checks for 7 runs): a run a list checked keeps its verdict for the
+        next list, which checks nothing."""
+        runs = view.Runs(self.files)
+        port = self.serve(runs)
+        real, checked = view.check, []
+
+        def check(r, tenant, run_id, *a, **k):
+            checked.append((run_id, a[1]))   # a run of a log (its trust file): both logs hold the signer's own run
+            return real(r, tenant, run_id, *a, **k)
+        with mock.patch.object(view, "check", side_effect=check):
+            first = self.get("/api/runs", self.admin, port)
+            self.assertEqual(first[0], 200)
+            after = len(checked)
+            self.assertEqual(self.get("/api/runs", self.admin, port)[0], 200)
+        self.assertLessEqual(set(self.ids.values()), {run_id for run_id, _ in checked})
+        self.assertEqual(sorted(checked), sorted(set(checked)))   # one check per run
+        self.assertEqual(len(checked), after)   # the second list checked nothing
+
+    @pytest.mark.unverified_bundles
+    def test_a_lists_check_of_an_older_snapshot_never_replaces_a_newer_verdict(self):
+        """A list reads one snapshot from its start: a record edited during a list turned the run's page FAILED, and the
+        list's check of its older snapshot then kept VERIFIED over it, for RECHECK_S."""
+        runs = view.Runs(self.files)
+        port = self.serve(runs)
+        a2, real, page = self.ids["a2"], view.check, []
+
+        def listed(query, cookie):
+            status, _, body = self.get("/api/runs" + query, cookie, port)
+            self.assertEqual(status, 200, body)
+            return [self.names.get(r["run_id"], r["run_id"]) for r in json.loads(body)["runs"]]
+
+        def check(r, tenant, run_id, *a, **k):   # a2's check in the list: the run is edited and its page opened first
+            if run_id == a2 and not page:
+                page.append(0)
+                pg.sql(self.admin1, "UPDATE tracekit_records SET record = regexp_replace(record::text, "
+                       "'\"tool\": ?\"Bash\"', '\"tool\":\"Bosh\"')::json WHERE run_id = %s", (a2,))
+                page[0] = runs.run(observe.ALL, {"log": "1", "tenant": "acme", "run": a2})["verdict"]["verdict"]
+            return real(r, tenant, run_id, *a, **k)
+        with mock.patch.object(view, "check", side_effect=check):
+            self.assertIn("a2", listed("?verdict=verified", self.admin))   # the list's own, older snapshot
+        self.assertEqual(page, ["failed"])
+        self.assertEqual(listed("?verdict=failed", self.acme), ["a2"])   # the page's newer verdict is kept
 
     def test_a_run_page_checks_two_runs_at_once_at_most(self):
         """Each /api/run request read the log and exported and verified its run with no limit: 16 at once made 16 full
@@ -284,8 +325,8 @@ class CentralViewer(unittest.TestCase):
                     yield json.loads(json.dumps(rec).replace('"Bash"', '"Bosh"')) if self.checked else rec
 
         def open_(runs, i):
-            r, note = real_open(runs, i)
-            return Edited(r), note
+            r, note, at = real_open(runs, i)
+            return Edited(r), note, at
 
         def check(r, *a, **k):
             out = real_check(r, *a, **k)
