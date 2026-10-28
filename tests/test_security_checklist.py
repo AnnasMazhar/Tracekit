@@ -82,11 +82,14 @@ def source_trees():
 
 
 def has_lines(trees, rel, name):
-    """Whether class `name` of module `rel` derives from netserver.Lines: through a base class defined in the same
-    module, or one imported by name from another module of tracekit/."""
+    """Whether class `name` of module `rel` derives from netserver.Lines ahead of BaseHTTPRequestHandler, whose
+    parse_request doesn't call on (so Lines' never runs): through a base class defined in the same module, or one
+    imported by name from another module of tracekit/."""
     tree = trees[rel]
     classes = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
-    for base in (getattr(b, "id", None) for b in classes[name].bases):
+    for base in (getattr(b, "attr", getattr(b, "id", None)) for b in classes[name].bases):
+        if base == "BaseHTTPRequestHandler":
+            return False
         if base == "Lines" or base in classes and base != name and has_lines(trees, rel, base):
             return True
         for imp in ast.walk(tree):
@@ -154,6 +157,9 @@ class Checklist(unittest.TestCase):
         """netserver.Lines refuses a CR that doesn't end its header line, which Python's parser takes as a line end."""
         trees = source_trees()
         self.assertEqual({key for key in SURFACES if not has_lines(trees, *key.split(":"))}, set())
+        order = {"m.py": ast.parse("class A(BaseHTTPRequestHandler, Lines): pass\n"
+                                   "class B(Lines, http.server.BaseHTTPRequestHandler): pass\n")}
+        self.assertEqual([has_lines(order, "m.py", c) for c in "AB"], [False, True])
 
     def test_checklist_lists_every_surface_and_names_tests_that_exist(self):
         with open(DOC, encoding="utf-8") as f:
