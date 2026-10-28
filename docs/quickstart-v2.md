@@ -79,6 +79,10 @@ An `ask` holds the call until a person answers it (`tracekit approvals`, or the 
 integration waits its own way. Every one checks the answer with the signer before the call runs. A signer error
 refuses the call. An unanswered approval expires after an hour.
 
+A call held in an SDK agent prints nothing while it waits: the agent just seems to stop. Run `tracekit approvals list`
+in another terminal to see the held call, then answer it ([below](#approve-from-another-terminal)). Only the coding-agent
+hooks print a line naming the approval and the command that answers it.
+
 | Integration | How it waits | Timeout | Then |
 |---|---|---|---|
 | OpenAI Agents SDK (Python, JS) | interrupts the run | none of its own | `apply_decisions(state)` (JS `applyDecisions`), then run the state again: an approved call runs, a rejected one reaches the model as a rejection |
