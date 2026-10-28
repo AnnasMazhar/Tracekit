@@ -1429,6 +1429,32 @@ class WhyData(WhyServer):
         self.assertTrue(any(r.get("session_id") == "b-good" for r in feed.records))
         self.assertFalse(any(r.get("session_id") == "a-bad" for r in feed.records))
 
+    def test_the_watcher_announces_only_alerts_raised_after_a_scan_completes(self):
+        """3ec0a0d moved the first scan inside the watcher's try. A first scan that fails must not make the runs it
+        never indexed look new: they are indexed silently once a scan completes, and only a run added after is
+        announced."""
+        root, feed = os.path.join(self.tmp, "an"), WhyFeed()
+        SYSTEM.run(seed=0, out_dir=root, run_id="old")
+        store = Store(root, out=feed, ingest=False)
+        real, listed = store.paths, []
+
+        def paths():   # the first listing fails: the first scan never completes
+            listed.append(1)
+            if len(listed) == 1:
+                raise OSError("the runs folder can't be listed")
+            return real()
+        store.paths = paths
+        store.watch(0.05)
+        self.addCleanup(store.stop)
+        self.assertTrue(wait_for(lambda: len(listed) >= 3, 10))   # a scan has completed since
+        SYSTEM.run(seed=0, out_dir=root, run_id="new")
+
+        def announced():   # run id -> the alerts announced with it
+            return {r["why"]["run_id"]: r["why"]["alerts"] for r in list(feed.records) if r.get("event") == "why"}
+        self.assertTrue(wait_for(lambda: "new" in announced(), 10))
+        self.assertTrue(announced()["new"])
+        self.assertNotIn("old", announced())
+
     def test_a_why_log_the_tape_cannot_read_never_stops_the_watcher(self):
         """The first scan ran outside the watcher's try: a run whose tape raised there ended the thread, and no later
         run was published for the server's life."""
