@@ -264,7 +264,7 @@ ask:
     class: shell
     field: target
     # history -c (alone or in a cluster, after other options), turning the history file off, vacuuming the journal
-    pattern: '^history\s(?:[^\n]*?\s)?-[A-Za-z]*c[A-Za-z]*(?:\s|$)|^unset\s+HISTFILE(?:\s|$)|^set\s+\+o\s+history(?:\s|$)|^(?:export\s+)?HISTFILE=/dev/null(?:\s|$)|^journalctl(?:[ \t\f\r]|\s*\n)[^\n]*?--vacuum-[^\s=]+(?:=|\s|$)'
+    pattern: '^history\s(?:[^\n]*?\s)?-[A-Za-z]*c[A-Za-z]*(?:\s|$)|^unset\s+HISTFILE(?:\s|$)|^set\s+\+o\s+history(?:\s|$)|^(?:export\s+)?HISTFILE=/dev/null(?:\s|$)|^journalctl(?:[ \t\f\r]|\s*?\n)[^\n]*?--vacuum-[^\s=]+(?:=|\s|$)'
     reason: clearing shell history or system logs
     remedy: Wait for a person to approve the held call, or leave shell history and system logs as they are.
     rationale: Clearing the history, turning it off or vacuuming the journal can hide earlier activity; a person confirms it.
@@ -347,9 +347,9 @@ ask:
     # its delimiter quoted any way, also as `bash -c` re-quotes it (<<'"'"'EOF'"'"'). The client fed one may follow
     # any word (a wrapper: `timeout 5 redis-cli <<< FLUSHALL`, `bash -c 'redis-cli <<EOF …'`, whose line holds the
     # heredoc). Only options (up to eight, each with at most one value) may come between the client and its
-    # herestring or heredoc, so a command that takes stdin as a value (`redis-cli -x SET k <<< FLUSHALL`) isn't held. Up to two of
-    # command, builtin and env, and a directory, may come before echo, printf and the piped-into client. A flush word
-    # that merely appears in the piped text (a grep hit, a sentence, a file piped in with cat) is not held: the rule is
+    # herestring or heredoc, so a command that takes stdin as a value (`redis-cli -x SET k <<< FLUSHALL`) isn't held.
+    # Up to two of command, builtin and env, and a directory, may come before echo, printf and the piped-into client.
+    # A flush word that merely appears in the piped text (a grep hit, a sentence, a file piped in with cat) is not held: the rule is
     # anchored on the client invocation, not on the keyword. A flush after the pipe, a pipe into another program,
     # printf with a separate format string, env with options or assignments, or a pipe into redis-cli through another
     # wrapper isn't read. The directory before a name is bounded, so the fallback engine stays linear
