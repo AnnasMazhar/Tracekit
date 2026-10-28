@@ -1399,24 +1399,30 @@ class Runs:
 
     def bundle(self, scope, q):
         """GET /api/bundle?log&tenant&run: the run's bundle (.tkb bytes); None when `scope` may not read the run, there is
-        no such run or no checkpoint covers its last record yet."""
+        no such run or no checkpoint covers its last record yet. It reads the log and exports the run under /api/run's
+        limit: past two at once, observe.Busy (503, try again)."""
         key = self._key(scope, q)
         if key is None:
             return None
         i, tenant, run_id = key
-        r, note = self._open(i)
+        if not self.verifying.acquire(blocking=False):
+            raise observe.Busy()
         fd, out = tempfile.mkstemp(suffix=".tkb", dir=self.tmp)
         os.close(fd)
         try:
-            run = r.runs.get((tenant, run_id))
-            if run is None or not note or run["seqs"][-1] >= note[0]:
-                return None
-            export(r, tenant, run_id, note[1], out)
-            with open(out, "rb") as f:
-                return f.read()
+            r, note = self._open(i)
+            try:
+                run = r.runs.get((tenant, run_id))
+                if run is None or not note or run["seqs"][-1] >= note[0]:
+                    return None
+                export(r, tenant, run_id, note[1], out)
+                with open(out, "rb") as f:
+                    return f.read()
+            finally:
+                r.close()
         finally:
-            r.close()
             os.unlink(out)
+            self.verifying.release()
 
 
 def server(feed, host, port, token, tls=None, login=None, desk=None, runs=None, why=None):

@@ -404,7 +404,7 @@ search, a run's page or a bundle download, even with B's run id. Its only write 
 |---|---|
 | `/api/runs?run&agent&tenant&since&until&verdict&gaps&denies&approvals&limit&after` | `{runs, next}`: at most `limit` (50) runs, each with its log, tenant, agent, first and last event time, record count, gaps, denies, approvals and verdict; `next` is the `after` of the next page. `since`/`until` are RFC 3339 UTC times; `verdict` is `verified`, `failed` or `pending`; `gaps=1`, `denies=1` and `approvals=1` keep runs that have one; `tenant` narrows an operator-admin's list. One search query per log per page, plus a reader of each log with matching runs (it reads that log's index). |
 | `/api/run?log&tenant&run&from` | the run's verdict with verify.v2's full report and, only when it verified, 500 of its records from the `from`th, with `next`; each request checks the run again, two at once at most: past that it is answered 503 with `Retry-After` |
-| `/api/bundle?log&tenant&run` | the run's `.tkb` bundle |
+| `/api/bundle?log&tenant&run` | the run's `.tkb` bundle; it shares `/api/run`'s limit, two at once |
 
 A run's verdict is what `tracekit verify` gives the bundle the viewer exports from the store; a run whose last record no
 checkpoint covers yet is `pending`, and a run that fails shows its failure report and none of its records. Every verdict

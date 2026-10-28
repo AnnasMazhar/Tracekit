@@ -200,6 +200,18 @@ class CentralViewer(unittest.TestCase):
         runs.verifying.release()
         self.assertEqual(self.get(a1, self.acme, port)[0], 200)
 
+    def test_a_bundle_download_takes_the_same_limit(self):
+        """Each /api/bundle request read the log and exported its whole run, with no limit."""
+        runs = view.Runs(self.files)
+        port = self.serve(runs)
+        a1 = f"/api/bundle?log=0&tenant=acme&run={self.ids['a1']}"
+        runs.verifying = threading.BoundedSemaphore(1)
+        runs.verifying.acquire()
+        status, r, _ = self.get(a1, self.acme, port)
+        self.assertEqual((status, r.getheader("Retry-After")), (503, "5"))
+        runs.verifying.release()
+        self.assertEqual(self.get(a1, self.acme, port)[0], 200)
+
     def test_downloaded_bundle_verifies_offline(self):
         status, r, data = self.get(f"/api/bundle?log=0&tenant=acme&run={self.ids['a1']}", self.acme)
         self.assertEqual(status, 200)
