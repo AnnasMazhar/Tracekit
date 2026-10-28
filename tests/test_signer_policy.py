@@ -363,6 +363,10 @@ class CodingPack(unittest.TestCase):
             "redis-cli -h cache.internal -n 2 <<< 'FLUSHDB ASYNC'",
             "redis-cli <<< $'FLUSHALL\\n'",
             "redis-cli -h cache.internal <<'EOF'\nSELECT 2\nFLUSHDB\nEOF",
+            'command echo FLUSHALL | redis-cli -h cache.internal',
+            '/bin/echo FLUSHALL | /usr/local/bin/redis-cli -h cache.internal',
+            '{ echo FLUSHALL; } | valkey-cli -h cache.internal',
+            "docker compose exec db psql -c 'DROP TABLE users'",
             # a client fed the flush through a wrapper or bash -c, which re-quotes the heredoc's delimiter
             "timeout 5 redis-cli -h cache.internal <<< FLUSHALL",
             "bash -c 'redis-cli -h cache.internal <<'\"'\"'EOF'\"'\"'\nSELECT 2\nFLUSHDB\nEOF'",
@@ -398,6 +402,8 @@ class CodingPack(unittest.TestCase):
             "redis-cli <<< 'FLUSHALL is a dangerous command'",
             'redis-cli -n 2 GET k <<< FLUSHALL',
             'redis-cli <<EOF\nGET flushall\nEOF',
+            "redis-cli -h cache.internal <<< 'GET flushall'",
+            'redis-cli -h cache.internal -x SET note <<< FLUSHALL',
         ]
         held_mcp = [
             ("mcp__postgres__query", {"query": "DROP TABLE users", "sql": "BEGIN; SELECT 1; ROLLBACK;"}),
@@ -684,11 +690,14 @@ class CodingPack(unittest.TestCase):
                    "zip -rm /tmp/x.zip " + t, "zip -mr /tmp/x.zip " + t, "zip -r -m /tmp/x.zip " + t,
                    "zip --move -r /tmp/x.zip " + t, "ls " + t + "/* | zip -m@ /tmp/x.zip",
                    "echo 'rm -rf " + t + "' | sh", "cat <<'EOF' | sh\nrm -rf " + t + "\nEOF", "fish -c 'rm -rf " + t + "'",
-                   "rm${IFS}-rf${IFS}" + t, "RM${IFS}-rf${IFS}" + t)
+                   "rm${IFS}-rf${IFS}" + t, "RM${IFS}-rf${IFS}" + t, "trap 'rm -rf ~/.codex/sessions' EXIT",
+                   "at now <<< 'rm -rf ~/.gemini/tmp'", "zip -rm /tmp/t.zip ~/.codex/sessions")
         kept = ("trap 'rm -rf \"$tmp\"' EXIT", "trap cleanup EXIT", "trap - EXIT", "zip -r out.zip " + t,
                 "zip -rm out.zip build", "at now <<< 'ls " + t + "'", "xargs -n1 echo <<< " + t,
                 "osascript -e 'display notification \"done\"'", "cat " + t + "/p/a.jsonl | xargs echo",
-                "echo 'ls " + t + "' | sh", "fish -c 'ls " + t + "'", "$PAGER " + t + "/p/a.jsonl")
+                "echo 'ls " + t + "' | sh", "fish -c 'ls " + t + "'", "$PAGER " + t + "/p/a.jsonl",
+                "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; make test", "zip -rm logs.zip build/logs",
+                "at now + 1 hour <<< 'ls " + t + " > /tmp/sessions.txt'")
         for pack, engine, e in self.every_pack():
             for command in deletes:
                 with self.subTest(pack=pack, engine=engine, command=command):

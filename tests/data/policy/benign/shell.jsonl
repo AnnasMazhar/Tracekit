@@ -209,8 +209,3 @@
 {"tool": "Bash", "args": {"command": "echo cdk destroy"}, "expect": "allow", "note": "mention CDK destruction as text"}
 {"tool": "Bash", "args": {"command": "cdk destroy --help"}, "expect": "allow", "note": "read CDK destruction help without running it"}
 {"tool": "Bash", "args": {"command": "cat ~/.qwen/settings.json"}, "expect": "allow", "note": "reading Qwen Code's settings"}
-{"tool": "Bash", "args": {"command": "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; make test"}, "expect": "allow", "note": "cleanup on exit"}
-{"tool": "Bash", "args": {"command": "zip -rm logs.zip build/logs"}, "expect": "allow", "note": "zip -m archiving build logs"}
-{"tool": "Bash", "args": {"command": "at now + 1 hour <<< 'ls ~/.claude/projects > /tmp/sessions.txt'"}, "expect": "allow", "note": "listing transcripts later through at"}
-{"tool": "Bash", "args": {"command": "redis-cli -h cache.internal <<< 'GET flushall'"}, "expect": "allow", "note": "flush word as a key in a herestring"}
-{"tool": "Bash", "args": {"command": "redis-cli -h cache.internal -x SET note <<< FLUSHALL"}, "expect": "allow", "note": "herestring stored as a value by redis-cli -x"}
