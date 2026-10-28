@@ -31,7 +31,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .core import event_hash, read_text
 from .ledger import read_records, verify_record_sig
-from .netserver import drain
+from .netserver import body_length, drain, read_body
 from .replay import CSP_META
 from .storage.base import StorageCorrupt, StorageUnavailable
 from .why.core import ts_seconds
@@ -612,15 +612,17 @@ def make_handler(feed, token, allowed_hosts=None, secure=False, login=None, appr
             return self._send(code, json.dumps(out, ensure_ascii=False))
 
         def _body(self, limit):
-            """The request's JSON object, else None once the refusal is sent."""
-            try:
-                n = int(self.headers.get("Content-Length", ""))
-            except ValueError:
+            """The request's JSON object, else None once the refusal is sent (or the body was cut short)."""
+            n, why = body_length(self.headers)
+            if why or n is None:
                 return self._send(411, '{"error":"needs a Content-Length"}')
-            if not 0 <= n <= limit:
+            if n > limit:
                 return self._send(413, '{"error":"body too large"}')
+            body = read_body(self, n)
+            if body is None:
+                return None
             try:
-                body = json.loads(self.rfile.read(n))
+                body = json.loads(body)
             except (UnicodeDecodeError, ValueError, RecursionError):   # RecursionError: nested too deep to parse
                 body = None
             return body if isinstance(body, dict) else self._send(400, '{"error":"the body is not a JSON object"}')

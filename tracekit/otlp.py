@@ -48,6 +48,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import client, policy, privacy
+from .netserver import body_length, read_body
 from .observe import LOOPBACK_HOSTS, _host_only
 from .usage import from_otel
 from .core import GENESIS, SCHEMA_VERSION, jsonable, now_ts
@@ -535,19 +536,17 @@ def make_handler(receiver):
             if self.path.split("?")[0].rstrip("/") != "/v1/traces":
                 self.close_connection = True
                 return self._out(404, {"Content-Type": "application/json"}, b'{"message":"not found"}')
-            if "Transfer-Encoding" in self.headers:   # the body is read by Content-Length only
+            n, why = body_length(self.headers)
+            if why:
                 self.close_connection = True
-                return self._out(400, {"Content-Type": "application/json"},
-                                 b'{"message":"Transfer-Encoding isn\'t supported: send the body with Content-Length"}')
-            try:
-                n = int(self.headers.get("Content-Length", "-1"))
-            except ValueError:
-                n = -1
-            if not 0 <= n <= MAX_BODY:
+                return self._out(400, {"Content-Type": "application/json"}, json.dumps({"message": why}).encode())
+            if n is None or n > MAX_BODY:
                 self.close_connection = True
                 return self._out(413, {"Content-Type": "application/json"},
                                  json.dumps({"message": f"body must be 0..{MAX_BODY} bytes with a Content-Length"}).encode())
-            body = self.rfile.read(n)
+            body = read_body(self, n)
+            if body is None:
+                return
             self._out(*handle_traces(receiver, body, self.headers.get("Content-Type"), self.headers.get("Content-Encoding")))
     return H
 

@@ -44,6 +44,37 @@ def drain(sock):
         pass
 
 
+def body_length(headers, digits=12):
+    """(n, None): the request's body is the n bytes its one Content-Length says (n None: it declares none). (None, why):
+    its framing is refused, with the connection closed. Every server here reads a body by Content-Length only; a proxy
+    in front that frames it otherwise (by Transfer-Encoding, by another Content-Length, by a header line Python's parser
+    dropped together with every one after it) would forward the bytes past it as another request. A value is ASCII
+    digits only: int() also takes `+1`, `1_0` and other scripts' digits, and raises past 4,300 of them."""
+    if headers.defects:
+        return None, "a malformed header line"
+    if "transfer-encoding" in headers:
+        return None, "Transfer-Encoding isn't supported: send the body with Content-Length"
+    n = headers.get_all("content-length") or []
+    if len(n) > 1:
+        return None, "more than one Content-Length"
+    if n and not (n[0].isascii() and n[0].isdigit() and len(n[0]) <= digits):
+        return None, f"Content-Length: at most {digits} ASCII digits"
+    return (int(n[0]) if n else None), None
+
+
+def read_body(handler, n):
+    """The n bytes of the body `handler` (a BaseHTTPRequestHandler) reads, or None when fewer arrive (the deadline cut
+    the connection, the client stopped sending): a part of a request is never acted on, and the connection closes."""
+    try:
+        body = handler.rfile.read(n)
+    except OSError:   # the read timeout, or the peer went away
+        body = b""
+    if len(body) < n:
+        handler.close_connection = True
+        return None
+    return body
+
+
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 

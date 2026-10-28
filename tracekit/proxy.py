@@ -34,6 +34,7 @@ import zlib
 
 from . import client, privacy
 from .core import content_ref, new_id, now_ts
+from .netserver import body_length, read_body
 from .observe import LOOPBACK_HOSTS, _host_only
 
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding",
@@ -227,30 +228,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if _host_only(self.headers.get("Host")) not in LOOPBACK_HOSTS:   # a rebound DNS name: not a local client
             self.close_connection = True
             return self._error(403, "tracekit proxy: unexpected Host header")
-        if self.path == "/__tracekit_health":
+        t0 = time.perf_counter()
+        n, why = body_length(self.headers)
+        if why:
+            self.close_connection = True
+            return self._error(400, f"tracekit proxy: {why}")
+        if (n or 0) > MAX_REQUEST_SIZE:
+            self.close_connection = True
+            return self._error(413, "tracekit proxy: request body exceeds the configured size limit")
+        body = read_body(self, n or 0)
+        if body is None:
+            return self._error(400, "tracekit proxy: incomplete request body")
+        if self.path == "/__tracekit_health":   # after the body is read: its bytes are never the next request
             body = json.dumps({"ok": True, "upstream": CFG["upstream"], "fail_mode": CFG["fail_mode"]}).encode()
             self.send_response(200); self.send_header("content-type", "application/json")
             self.send_header("content-length", str(len(body))); self.end_headers(); self.wfile.write(body)
             return
-        t0 = time.perf_counter()
-        if "transfer-encoding" in self.headers:   # the body is read by Content-Length only
-            self.close_connection = True
-            return self._error(400, "tracekit proxy: Transfer-Encoding isn't supported; send Content-Length")
-        try:
-            n = int(self.headers.get("content-length") or 0)
-        except ValueError:
-            self.close_connection = True
-            return self._error(400, "tracekit proxy: invalid content-length")
-        if n < 0:
-            self.close_connection = True
-            return self._error(400, "tracekit proxy: invalid content-length")
-        if n > MAX_REQUEST_SIZE:
-            self.close_connection = True
-            return self._error(413, "tracekit proxy: request body exceeds the configured size limit")
-        body = self.rfile.read(n) if n else b""
-        if len(body) != n:
-            self.close_connection = True
-            return self._error(400, "tracekit proxy: incomplete request body")
         plain = _decode(body, self.headers.get("content-encoding"))
         try:
             decoded = json.loads(plain) if plain else None
