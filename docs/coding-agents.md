@@ -132,10 +132,10 @@ holds the rest of the line, whose full text is read; a hook prompt with no line 
 own. Hooks before this release record no prompt, and TK-X208 says `no_hook`.
 
 The hook also sends what the typed text says not to do ("don't touch billing.py", "read-only", "don't push", "no
-network") to the signer as [live constraints](policy-v2.md#live-constraints) (one stated only in text the harness added
-is recorded but not made live, and Claude Code shows a notice naming it; one typed after a wrapper's name in a sentence
-is live, though the text from that name on is recorded as untrusted): a later call that breaks one waits for your
-approval, and the agent reads why on stderr:
+network") to the signer as [live constraints](policy-v2.md#live-constraints) (one stated only in text you pasted or the
+harness added is recorded but not made live, and Claude Code shows a notice naming it; one typed after a wrapper's name
+in a sentence is live, though the text from that name on is recorded as untrusted): a later call that breaks one waits
+for your approval, and the agent reads why on stderr:
 
 ```text
 [tracekit] waiting for approval apr-… (TK-CONSTRAINT): the person's request in this run said not to modify billing.py; ask the person; a person approves it from another terminal with `tracekit approvals approve apr-…` or rejects it with `tracekit approvals reject apr-…`

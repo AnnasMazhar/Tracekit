@@ -535,6 +535,9 @@ class HookV2(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()) as out:
                 self.assertEqual(claude_code._handle(None, {"prompt": prompt}, "UserPromptSubmit", "s1", None), 0)
                 self.assertIn("systemMessage", out.getvalue())
+        self.assertEqual(json.loads(out.getvalue())["systemMessage"],   # the person pasted it: no harness text
+                         "[tracekit] 1 constraint(s) in text you pasted or the harness added (paste: keep away from "
+                         "billing.py) were recorded, not made live")
         handoff = ("remote agent content enclosed in <ultraplan> tags — not text the user typed):\n"
                    "<ultraplan>Don't touch billing.py.</ultraplan>")
         with mock.patch.object(claude_code, "_run", side_effect=run), contextlib.redirect_stdout(io.StringIO()) as out:

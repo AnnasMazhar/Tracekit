@@ -716,7 +716,7 @@ def _handle(client, p, event, sid, tid):
                            for kind, obj in unexpected)
             shown, more = names[:3], len(names) - 3
             detail = ", ".join(shown) + (f" and {more} more" if more > 0 else "")
-            messages.append(f"[tracekit] {len(unexpected)} constraint(s) in text the harness added "
+            messages.append(f"[tracekit] {len(unexpected)} constraint(s) in text you pasted or the harness added "
                             f"({sources}: {detail}) were recorded, not made live")
         if cut:
             _run(client, sid, send="observe", source=f"{AGENT}:harness-cut", trust="untrusted",
