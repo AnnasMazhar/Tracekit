@@ -344,6 +344,10 @@ class CodingPack(unittest.TestCase):
             'psql -c "DELETE FROM users" -d prod',
             'docker exec db psql -c "DROP TABLE users"',
             'docker compose exec db psql -c "DROP TABLE users"',
+            # a cluster with its c or e after the ninth letter, which no client needs, is held unread
+            "psql -" + "x" * 10 + "c 'DROP TABLE users'",
+            "mysql -" + "N" * 9 + "se 'DROP TABLE users'",
+            "mariadb -h db -cxxxxxxxxxe 'DROP TABLE users'",
             'docker-compose exec -T db mysql -e "DROP DATABASE app"',
             'kubectl exec -n ns pod -- psql -c "DROP TABLE users"',
             'sqlite3 app.db "DROP TABLE users"',
@@ -390,6 +394,8 @@ class CodingPack(unittest.TestCase):
             # and unscoped DELETE only, whatever the options before the flag
             'psql -c "BEGIN; SELECT 1; ROLLBACK;"',
             'docker compose exec db psql -c "SELECT 1"',
+            'psql -AtqXnvsc "SELECT 1"',
+            "psql -cCHECKPOINT",
             # a lone minus or slash inside an UPDATE is not a comment, and an UPDATE isn't held
             'psql -c "BEGIN; UPDATE t SET x = a/-5; ROLLBACK;"',
             'psql -c "BEGIN; UPDATE t SET x = a/b; ROLLBACK;"',

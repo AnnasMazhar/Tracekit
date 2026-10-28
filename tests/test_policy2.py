@@ -640,6 +640,8 @@ class Speed(unittest.TestCase):
         # a long short-option cluster after the client (review of 1.5.0's fix), and a comment opened in each of many
         # SQL strings, which read on past the string's closing quote
         calls += [("Bash", {"command": "mysql -e" + "x" * n}), ("Bash", {"command": "psql -" + "c" * n}),
+                  ("Bash", {"command": "mysql -" + "x" * n}), ("Bash", {"command": "psql -" + "x" * n + "c"}),
+                  ("Bash", {"command": "psql " + "-xxxxxxxxxx " * (n // 12)}),
                   ("Bash", {"command": "psql -c 'SELECT 1' -c" + "x" * (n - 24)})]
         calls += [("mcp__db__run", {"rows": [{key: text}] * (n // 16)}) for key in ("sql", "query")
                   for text in ("/*", "-- ", "/* x")]
