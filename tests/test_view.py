@@ -1472,11 +1472,10 @@ class WhyData(WhyServer):
         self.assertTrue(wait_for(lambda: len(listed) >= 3, 10))   # a scan has completed since
         SYSTEM.run(seed=0, out_dir=root, run_id="new")
 
-        def announced():   # run id -> the alerts announced with it
-            return {r["why"]["run_id"]: r["why"]["alerts"] for r in list(feed.records) if r.get("event") == "why"}
-        self.assertTrue(wait_for(lambda: "new" in announced(), 10))
-        self.assertTrue(announced()["new"])
-        self.assertNotIn("old", announced())
+        def announced(run_id):   # the alerts of each announcement of the run: one half-written is announced again
+            return [r["why"]["alerts"] for r in list(feed.records) if r.get("event") == "why" and r["why"]["run_id"] == run_id]
+        self.assertTrue(wait_for(lambda: any(announced("new")), 10))   # an announcement with its alerts
+        self.assertEqual(announced("old"), [])
 
     def test_a_why_log_the_tape_cannot_read_never_stops_the_watcher(self):
         """The first scan ran outside the watcher's try: a run whose tape raised there ended the thread, and no later
