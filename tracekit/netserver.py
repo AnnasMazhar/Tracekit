@@ -111,6 +111,9 @@ def read_body(handler, n):
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
+    # socketserver's listen backlog of 5: on Linux a burst past it has its handshakes dropped, so a client waits a
+    # second or more for a retransmit, or connects while the server doesn't see the connection for that long
+    request_queue_size = 256
 
     def __init__(self, addr, handler, ssl_context=None, timeout=TIMEOUT_S, max_threads=MAX_THREADS,
                  deadline=DEADLINE_S, max_per_ip=MAX_PER_IP, max_streams=MAX_STREAMS,
