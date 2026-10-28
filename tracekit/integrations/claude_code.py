@@ -123,14 +123,15 @@ def _load(path):
             time.sleep(0.05)
 
 
-def _run(client, sid, register=True, send=None, transcript=None, resumed=False, stated=(), **fields):
+def _run(client, sid, register=True, send=None, transcript=None, resumed=False, stated=(), skip=0, **fields):
     """(the session's run, registered on its first event; with `send`, the signer's reply to that event call, sent with
     the session's stream and next client_seq under the session lock so parallel hooks reach the signer in client_seq
     order, and sent again on a new run when the signer has closed the stored one (idle); without `register`, the stored
     run is marked ended instead, and the session's next event that registers starts the new one). `transcript`
     (SessionStart): kept in the session state; each run of the session gets a tailer on it, which starts where the
     session's earlier run was last seen open (_seen; `resumed`: a resumed session's transcript as it is now).
-    `stated`: the constraints a prompt states, kept in the session state; each run gets the session's (_constrain)."""
+    `stated`: the constraints a prompt states, kept in the session state; each run gets the session's (_constrain).
+    `skip`: client_seq values left unsent before `send` (_send)."""
     path = _state(sid)
     with open(path[:-len(".json")] + ".lock", "a") as lk:   # parallel tool calls must not register two runs
         lock_file(lk)
@@ -165,7 +166,7 @@ def _run(client, sid, register=True, send=None, transcript=None, resumed=False, 
         if st.get("ended"):   # the signer said so already: asking again would only count as a late write
             raise RPCError("run_closed", f"run {st['run_id']} ended")
         try:
-            return _send(client, path, st, send, fields, seen)
+            return _send(client, path, st, send, fields, seen, skip)
         except RPCError as e:
             if e.code not in ("run_closed", "unknown_run"):
                 raise
@@ -175,7 +176,7 @@ def _run(client, sid, register=True, send=None, transcript=None, resumed=False, 
             st = _register(client, path, st)
             _constrain(client, path, st)
             _tail(client, path, st)
-            return _send(client, path, st, send, fields, seen)
+            return _send(client, path, st, send, fields, seen, skip)
 
 
 def _register(client, path, prev=None, offsets=None):
@@ -285,13 +286,15 @@ def _tail(client, path, st):
     files.write_json(path, st)
 
 
-def _send(client, path, st, method, fields, seen=None):
-    """`seen`: _seen before the call; once the run has taken it, the run was open with those lines written."""
-    run = RunHandle(client, st)
-    files.write_json(path, dict(st, seq=st["seq"] + 1))
-    out = run.call(method, stream=st["stream"], client_seq=st["seq"], **fields)
+def _send(client, path, st, method, fields, seen=None, skip=0):
+    """`seen`: _seen before the call; once the run has taken it, the run was open with those lines written. `skip`:
+    client_seq values left unsent before this event, events the hook could not send: the signer records the gap and
+    marks the run's provenance index partial, so `from: untrusted` rules fail closed."""
+    run, seq = RunHandle(client, st), st["seq"] + skip
+    files.write_json(path, dict(st, seq=seq + 1))
+    out = run.call(method, stream=st["stream"], client_seq=seq, **fields)
     if seen:
-        files.write_json(path, dict(st, seq=st["seq"] + 1, offsets=seen))
+        files.write_json(path, dict(st, seq=seq + 1, offsets=seen))
     return run, out
 
 
@@ -718,12 +721,12 @@ def _handle(client, p, event, sid, tid):
             detail = ", ".join(shown) + (f" and {more} more" if more > 0 else "")
             messages.append(f"[tracekit] {len(unexpected)} constraint(s) in text you pasted or the harness added "
                             f"({sources}: {detail}) were recorded, not made live")
-        if cut:
-            _run(client, sid, send="observe", source=f"{AGENT}:harness-cut", trust="untrusted",
+        if cut:   # the cut text is an observation the signer never gets: one client_seq skipped says so (_send)
+            _run(client, sid, send="observe", skip=1, source=f"{AGENT}:harness-cut", trust="untrusted",
                  value=f"Harness text was cut after {MAX_HARNESS_TEXT} characters ({', '.join(cut)}).")
             messages.append(f"[tracekit] oversized untrusted text was cut after {MAX_HARNESS_TEXT} characters "
-                            f"({', '.join(cut)}); values in the cut text are not marked untrusted, so a "
-                            f"from: untrusted rule won't hold a call that uses them")
+                            f"({', '.join(cut)}); for the rest of the run a from: untrusted rule applies to every "
+                            f"call its pattern matches, whatever the value's source")
         if messages and AGENT == "claude-code":   # Claude Code then shows this, not stderr: FULL goes here too
             print(json.dumps({"systemMessage": "\n".join([FULL] * bool(refused) + messages)}))
         return 1 if refused else 0   # shown to the person (FULL, on stderr), never blocking the prompt

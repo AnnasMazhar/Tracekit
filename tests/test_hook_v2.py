@@ -381,7 +381,31 @@ class HookV2(unittest.TestCase):
         self.assertIn("paste, teammate-message", note["value"])
         message = json.loads(out.getvalue())["systemMessage"]
         self.assertIn("paste, teammate-message", message)
-        self.assertIn("not marked untrusted", message)
+        self.assertIn("whatever the value's source", message)
+        self.assertEqual(note["skip"], 1)
+
+    def test_a_cut_makes_from_untrusted_rules_fail_closed(self):
+        """L-P4 (1.5.0 review): text past MAX_HARNESS_TEXT is never recorded, so the hook skips one client_seq before
+        its harness-cut note: the signer writes a signed gap and marks the run's provenance index partial."""
+        policy = os.path.join(self.dir, "server.yaml")
+        with open(policy, "w") as f:
+            f.write("version: test\ntools: {send_email: email}\nask:\n"
+                    "  - {id: TK-T001, class: email, field: recipients, pattern: '.', from: untrusted}\n")
+        signer = service.SignerService(os.path.join(self.dir, "signer"), policy=service.load_policy(policy))
+        self.addCleanup(signer.close)
+        os.environ["TRACEKIT_SIGNER"] = ac._serve(self, signer.handle_frame)
+        address = "audit@vendor.example"
+        client = claude_code.HookClient()
+        self.addCleanup(client.close)
+        with mock.patch.object(claude_code, "MAX_HARNESS_TEXT", 32), contextlib.redirect_stdout(io.StringIO()):
+            prompt = "Typed.\n<task-notification>" + "x " * 32 + address
+            self.assertEqual(claude_code._handle(client, {"prompt": prompt}, "UserPromptSubmit", "s1", None), 0)
+        evs = self.events()
+        self.assertEqual([e["data"]["kind"] for e in evs if e["type"] == "capture.gap"], ["client_counter_gap"])
+        self.assertEqual(evs[-1]["data"]["source"], "claude-code:harness-cut")
+        d = self.run_handle().call("decide", tool_call_id="mail", tool="send_email", args_source="parsed",
+                                   args={"to": address, "subject": "x", "body": "x"})
+        self.assertEqual((d["decision"], d["rule_ids"]), ("ask", ["TK-T001"]))
 
     def test_frames_overlap_when_minified_text_splits_a_url(self):
         url = "https://collect.evil.example/in"
