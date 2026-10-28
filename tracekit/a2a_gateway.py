@@ -77,9 +77,9 @@ CALLERS_WITH_TASKS = 1024
 MAX_TASK_ID = 1024
 MAX_REFERENCE_TASK_IDS = 64
 # the fields of message/send's, message/stream's and tasks/get's params by their names folded as a receiver may read
-# them: a2a-python reads snake_case names too, and a JSON decoder may match names in any case (Go's encoding/json
-# does); metadata and a data part's data are free-form. lean: A2A 0.3's fields, all the gateway and the policy read;
-# add a later version's once they read one of its fields
+# them: a2a-python reads snake_case names too, and a JSON decoder may match names in any case, or without `-` and `_`
+# (Go's encoding/json and json/v2 do); metadata and a data part's data are free-form. lean: A2A 0.3's fields, all the
+# gateway and the policy read; add a later version's once they read one of its fields
 FIELDS = {f.casefold(): f for f in (
     "message", "configuration", "metadata", "acceptedOutputModes", "historyLength", "pushNotificationConfig",
     "blocking", "id", "url", "token", "authentication", "schemes", "credentials", "role", "parts", "extensions",
@@ -118,8 +118,9 @@ class _Tasks:
 
 
 def _misspelled(params):
-    """The A2A field `params` names, at any depth, in a spelling other than A2A's, if any: a receiver may read it as
-    that field (FIELDS), where the gateway and the policy (policy2/classes.a2a_fields) read only A2A's spelling."""
+    """Why `params` is refused, if it names an A2A field, at any depth, in a spelling other than A2A's: a receiver may
+    read it as that field (FIELDS), where the gateway and the policy (policy2/classes.a2a_fields) read only A2A's
+    spelling. A key outside ASCII is refused too: a decoder that folds case by Unicode may read `ıd` as `id`."""
     stack = [params]
     while stack:
         value = stack.pop()
@@ -127,9 +128,12 @@ def _misspelled(params):
             stack += value
         elif isinstance(value, dict):
             for key, v in value.items():
-                field = FIELDS.get(key.replace("_", "").casefold())
+                if not key.isascii():
+                    return f"params has a key outside ASCII ({key[:64]!r}); A2A's field names are ASCII"
+                field = FIELDS.get(key.replace("_", "").replace("-", "").casefold())
                 if field not in (None, key):
-                    return field
+                    return (f"params names {field} in a spelling A2A does not use (another case, snake_case or "
+                            f"kebab-case); send it as {field}")
                 if field is not None and field not in FREE_FORM:
                     stack.append(v)
     return None
@@ -209,8 +213,7 @@ class _A2aGateway(_Handler):
             raise _Error(-32602, "params is an object")
         misspelled = _misspelled(params)
         if misspelled:
-            raise _Error(-32602, f"params names {misspelled} in a spelling A2A does not use (another case or "
-                                 f"snake_case); send it as {misspelled}")
+            raise _Error(-32602, misspelled)
         if isinstance(params.get("configuration"), dict) and \
                 params["configuration"].get("pushNotificationConfig") is not None:
             raise _Error(-32602, "the gateway does not relay push notification configs; read the task's state with "

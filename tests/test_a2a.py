@@ -306,7 +306,9 @@ class Gateway(unittest.TestCase):
         for message in ({"Message": FILE}, {"message": dict(TEXT, Parts=FILE["parts"])},
                         {"message": dict(FILE, parts=[{"Kind": "file", "File": {"URI": uri}}])},
                         {"message": dict(FILE, parts=[{"kind": "file", "file": {"URI": uri}}])},
-                        {"message": dict(FILE, parts=[{"kind": "file", "file": {"uri": uri}, "mime_type": "x"}])}):
+                        {"message": dict(FILE, parts=[{"kind": "file", "file": {"uri": uri}, "mime_type": "x"}])},
+                        {"message": dict(FILE, parts=[{"kind": "file", "file": {"uri": uri, "mime-type": "x"}}])},
+                        {"message": dict(FILE, parts=[{"kınd": "file", "file": {"uri": uri}}])}):
             with self.subTest(message=message):
                 _, _, body = self.post("researcher", params=message)
                 self.assertEqual(json.loads(body)["error"]["code"], -32602)
