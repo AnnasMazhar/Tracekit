@@ -1,4 +1,6 @@
 """Installer writes never follow a planted symlink, create files 0600 from the start, and dev TCP has no port race."""
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -369,6 +371,32 @@ class ClaudeConfigDir(unittest.TestCase):
         with mock.patch.dict(os.environ, {"TRACEKIT_CLIENT_HOME": os.path.join(d, "client")}):
             install.init_dev(os.path.join(d, "sig"), [], start=False, hooks_path=settings)
         self.assertEqual(install.read_json(os.path.join(d, "client", "config.json"))["hooks_settings"], settings)
+
+    def test_v2_init_records_where_it_put_the_hooks(self):
+        """init --dev --v2 or --remote --v2 with CLAUDE_CONFIG_DIR set: doctor finds the hooks and uninstall removes
+        every one from a shell without it (they stayed, and blocked every call once tracekit was gone)."""
+        from tracekit import cli, doctor
+        token = tempfile.NamedTemporaryFile(delete=False)
+        token.close()
+        self.addCleanup(os.remove, token.name)
+        for argv in (["init", "--dev", "--v2"],
+                     ["init", "--remote", "https://signer.example", "--v2", "--token-file", token.name]):
+            with self.subTest(argv[1]):
+                d = tempfile.mkdtemp()
+                self.addCleanup(shutil.rmtree, d, True)
+                settings, client_home = os.path.join(d, "conf", "settings.json"), os.path.join(d, "client")
+                install._write_client_dir(client_home, {"socket": "s"})   # an earlier init's client config
+                env = {"HOME": d, "USERPROFILE": d, "XDG_DATA_HOME": d, "TRACEKIT_CLIENT_HOME": client_home}
+                with mock.patch.dict(os.environ, dict(env, CLAUDE_CONFIG_DIR=os.path.dirname(settings))), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(cli.main(argv), 0)
+                self.assertEqual(install._hook_summary(install.read_json(settings))["versions"], ["v2"])
+                self.assertEqual(install.read_json(os.path.join(client_home, "config.json")),
+                                 {"socket": "s", "hooks_settings": settings})
+                with mock.patch.dict(os.environ, env), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(doctor._dev_settings(), settings)
+                    self.assertEqual(install.uninstall(), settings)
+                self.assertEqual(install.read_json(settings).get("hooks"), None)
 
     def test_hooks_are_found_and_removed_with_or_without_claude_config_dir(self):
         for installed_with, removed_with in ((True, False), (False, True)):
