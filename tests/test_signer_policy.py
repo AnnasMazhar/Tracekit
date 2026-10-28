@@ -694,6 +694,10 @@ class CodingPack(unittest.TestCase):
         # trap's action and what at schedules are code every rule reads
         self.verdicts([("trap 'sudo id' EXIT", "TK-D001"), ("at now <<< 'sudo id'", "TK-D001"),
                        ("batch <<EOF\ngit push --force origin main\nEOF", "TK-D003")])
+        # code they run that the parser can't read (a name from a variable) isn't held, as before it was read
+        for command in ('trap "$cleanup" EXIT', 'at now <<< "$JOB"', "batch <<EOF\n$JOB\nEOF"):
+            with self.subTest(command=command):
+                self.assertNotIn("TK-SHELL-PARSE", self.e.decide("Bash", {"command": command})["rule_ids"])
 
     def test_opencode_sessions_are_transcripts_to_the_file_tools(self):
         self.verdicts([({"file_path": "/home/u/.local/share/opencode/storage/message/s/m.json"}, "TK-D009"),

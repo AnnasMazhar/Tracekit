@@ -23,7 +23,8 @@ _BARE_ADDRESS = re.compile(r"[0-9][0-9A-Za-z.]*(:[0-9]*)?([/?#]|$)")   # curl 28
 # lean: a dotted number (npm version 1.2.3) still reads as one; read bare words only in network commands if it flags
 # too much
 _BARE_TARGET = re.compile(r"http://[1-9][0-9]*(\.[0-9]+){3}/")
-REGEX_TIMEOUT_S = 1.0       # fallback engine only: the time all matches of one decision share; a match that runs out
+_SCHEDULED = {"trap", "at <<<", "at <<", "batch <<<", "batch <<"}   # shell.py's `via` for code run later
+REGEX_TIMEOUT_S = 1.0      # fallback engine only: the time all matches of one decision share; a match that runs out
                             # of it denies, marked nondeterministic
 
 
@@ -163,7 +164,9 @@ class Engine:
                     # its own target and code
                     raw = command if isinstance(command, str) else canonical(command)
                     parsed = [], [], [raw], [], [raw]
-                if any(c["opaque"] for c in parsed[0]):
+                # what trap, at or batch run later and the parser can't read (trap "$f" EXIT) isn't held, as before
+                # their code was read; with a writer's name in it, it counts for TK-D008 (_effects)
+                if any(c["opaque"] and not _SCHEDULED.intersection(c["via"]) for c in parsed[0]):
                     unreadable.append("TK-SHELL-PARSE")
         # from here: the fallback's time is its matches', not the parse's, which is the same on either engine and bounded by MAX_WORK (a few times the 64 KiB input)
         nondeterministic, deadline = False, time.monotonic() + REGEX_TIMEOUT_S
