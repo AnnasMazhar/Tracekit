@@ -873,12 +873,29 @@ class Shell(unittest.TestCase):
                     continue
                 self.assertIn(["sudo", "id"], [command["argv"] for command in parsed])
         for cmd in ("echo $(( i + 1 ))", "echo $(( a[1] ))", "echo $(( ${#arr[@]} - 1 ))",
-                    "echo $(( ${arr[0]} * 2 ))", "echo $(( $n / 2 ))", "echo $(( $(nproc) * 2 ))"):
+                    "echo $(( ${arr[0]} * 2 ))", "echo $(( $n / 2 ))", "echo $(( a[i] ))",
+                    "echo $(( a[$i] ))", "echo $(( $(nproc) * 2 ))"):
             for pack in ("coding.yaml", "dev.yaml", "server.yaml", "strict.yaml"):
                 pol = pc.build(os.path.join(PACKS, pack))[0]
                 for policy_engine in (Engine(pol, "re2"), Engine(pol, "regex")):
                     with self.subTest(pack=pack, cmd=cmd):
                         self.assertNotIn("TK-SHELL-PARSE", policy_engine.decide("Bash", {"command": cmd})["rule_ids"])
+
+        for cmd in ("x='$(id)'; echo $(( a[$x] ))", 'x="$(id)"; echo $(( a[${x}] ))',
+                    "x='$(id)'; echo $(( a[${x:-0}] ))", 'x="$(id)"; let "n=a[$x]"',
+                    'x="$(id)"; declare -i n="a[${x}]"', 'x="$(id)"; [[ a[$x] -eq 1 ]]'):
+            with self.subTest(cmd=cmd), self.assertRaises(shell.ParseError):
+                shell.parse(cmd)
+        for cmd in ('let "n=a[${x:-$}(id)]"', 'declare -i n="a[${x:-$}(id)]"',
+                    'local -i n="a[${x:-$}(id)]"', 'typeset -i n="a[${x:-$}(id)]"'):
+            with self.subTest(cmd=cmd), self.assertRaises(shell.ParseError):
+                shell.parse(cmd)
+            for pack in ("coding.yaml", "dev.yaml", "server.yaml", "strict.yaml"):
+                pol = pc.build(os.path.join(PACKS, pack))[0]
+                for policy_engine in (Engine(pol, "re2"), Engine(pol, "regex")):
+                    with self.subTest(pack=pack, cmd=cmd):
+                        self.assertIn("TK-SHELL-PARSE", policy_engine.decide("Bash", {"command": cmd})["rule_ids"])
+        self.assertIn(["date"], [command["argv"] for command in shell.parse("v=a[`date`]; echo $((v))")])
 
     def test_arithmetic_expansion_without_a_substitution_is_skipped_as_before(self):
         """With no `$(` or backtick in it, `$(( ))` is skipped unread as before the substitutions in it were read:
@@ -938,6 +955,30 @@ class Shell(unittest.TestCase):
             # linear: 4 times the text takes about 4 times as long (quadratic would be 16)
             self.assertLess(samples[2], 8 * samples[0] + 0.005 * SLOWER)
             self.assertLess(samples[2], 0.5 * SLOWER)
+
+    def test_arithmetic_context_with_unclosed_subscripts_is_linear(self):
+        def best(cmd):
+            times = []
+            for _ in range(3):
+                start = time.perf_counter()
+                try:
+                    shell.parse(cmd)
+                except shell.ParseError:
+                    pass
+                times.append(time.perf_counter() - start)
+            return min(times)
+
+        n = MAX_SUBJECT // 4
+        for build in (
+            lambda k: "echo $(( 1 )) " + "a[" * (k // 2),
+            lambda k: "echo $(( 1 )) " + "name[" * (k // 5),
+            lambda k: "echo $(( 1 )) a[" + "x" * k,
+            lambda k: "echo $(( 1 )) a[" + "x" * (k - 1) + "]",
+        ):
+            with self.subTest(cmd=build(1)[:20]):
+                small, big = best(build(n // 4)), best(build(n))
+                self.assertLess(big, 8 * small + 0.005 * SLOWER)
+                self.assertLess(big, 2 * SLOWER)
 
     def test_nested_reparsed_consumers_are_bounded(self):
         cmd = 'eval "$(id)" "$(id)"'

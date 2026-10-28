@@ -164,6 +164,9 @@ def analyse(command):
         test_open = line.find("[[")
         has_test_context = test_open >= 0 and any(line.find(op, test_open + 2) >= 0 for op in ("-eq", "-ne", "-lt", "-le", "-gt", "-ge"))
         if (has_context and arithmetic.search(line)) or has_test_context:
+            parameterized_index = _has_parameterized_index(line)
+            if parameterized_index and re.search(r"\$\((?!\()|`|\$\{[^{}]*\$\}\s*\(", line):
+                raise ParseError("a parameterized arithmetic subscript on a line with a substitution is not supported")
             literals = list(_STR.finditer(line))
             i = 0
             while i < len(line):
@@ -182,13 +185,19 @@ def analyse(command):
                 text = literal.group(2) if hasattr(literal, "re") else literal[2]
                 if not re.search(r"[A-Za-z_][A-Za-z0-9_]*\[[^]]*(?:\$\(|`)", text):
                     continue
-                for match in re.finditer(r"\$\(|`", text):
+                pos = 0
+                while True:
+                    match = re.search(r"\$\(|`", text[pos:])
+                    if not match:
+                        break
+                    start = pos + match.start()
                     parser = _Parser(text, ctx, ["arithmetic subscript"])
-                    parser.i = match.start()
+                    parser.i = start
                     if text.startswith("$(", parser.i):
                         parser.dollar(False)
                     else:
                         parser.backtick()
+                    pos = parser.i
     _Parser(command, ctx, []).script()
     active = False
     for step in reversed(ctx["steps"]):
@@ -475,6 +484,25 @@ def _ansi_c(text):
             return chr(int(e, 8))
         return _ANSI.get(e, e)
     return re.sub(r"\\(x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|[0-7]{1,3}|.)", one, text, flags=re.S)
+
+
+def _has_parameterized_index(text):
+    """Find parameter expansion in a bracketed index with one forward scan."""
+    inside = False
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == "[":
+            inside = True
+        elif c == "]":
+            inside = False
+        elif inside and c == "$":
+            if text.startswith("${", i) or (
+                i + 1 < len(text) and text[i + 1] not in "({" and _NAME.match(text, i + 1)
+            ):
+                return True
+        i += 1
+    return False
 
 
 class _Parser:
@@ -941,12 +969,22 @@ class _Parser:
         # Bash expands an arithmetic array index a second time. If parameter
         # expansion can build a substitution there, the resulting program is
         # not present for this parser to read.
-        subscript = re.search(r"\[[^\]]*\]", body)
-        if subscript:
-            index = subscript.group()
+        subscript_start = body.find("[")
+        subscript_end = body.find("]", subscript_start + 1) if subscript_start >= 0 else -1
+        if subscript_end >= 0:
+            index = body[subscript_start:subscript_end + 1]
             plain_parameters = re.sub(r"\$\{[^{}]*\}|\$[A-Za-z_][A-Za-z0-9_]*", "", index)
             if "$" in plain_parameters or "`" in index or re.search(r"\$\{[^{}]*\$\}\s*\(", index):
                 raise ParseError("an expandable command in an arithmetic subscript is not supported")
+            # A same-line assignment can supply text that bash evaluates again as
+            # an arithmetic subscript. Its command is not available to this parse.
+            line_start = self.s.rfind("\n", 0, start) + 1
+            line_end = self.s.find("\n", self.i)
+            if line_end < 0:
+                line_end = len(self.s)
+            line = self.s[line_start:line_end]
+            if "$" in index and re.search(r"\$\(|`", line):
+                raise ParseError("a parameterized arithmetic subscript on a line with a substitution is not supported")
         parens, level = re.findall(r"[()]", body), 0
         for p in parens:
             level += 1 if p == "(" else -1
@@ -958,6 +996,7 @@ class _Parser:
                              "or a backtick with a double quote in $(( )) that has $( or a backtick is not supported")
         self.i += 2
         self.leave()
+
 
     def dquote(self, term):
         """Read up to `term` ("\"", "}" or None for a heredoc body), running substitutions; return the text."""
@@ -1019,8 +1058,14 @@ class _Parser:
             arithmetic_body = s[self.i + 3:j]
             possible_subscript = re.sub(r"\$\{[^{}]*\}|\$[A-Za-z_][A-Za-z0-9_]*", "", arithmetic_body)
             builds_substitution = re.search(r"\$\{[^{}]*\$\}\s*\(", arithmetic_body)
+            line_start = s.rfind("\n", 0, self.i) + 1
+            line_end = s.find("\n", self.i)
+            if line_end < 0:
+                line_end = len(s)
+            line_has_substitution = re.search(r"\$\((?!\()|`", s[line_start:line_end])
             if "$(" in arithmetic_body or "`" in arithmetic_body or (
-                    "[" in arithmetic_body and ("$" in possible_subscript or builds_substitution)):
+                    "[" in arithmetic_body and ("$" in possible_subscript or builds_substitution or
+                                                "$" in arithmetic_body and line_has_substitution)):
                 self.i += 3
                 self.arith()
             else:
