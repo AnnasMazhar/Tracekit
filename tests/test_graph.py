@@ -54,7 +54,7 @@ def run(*argv):
 
 def rec(seq, typ, data, run_id="r-obs"):
     return {"event": {"run_id": run_id, "run_seq": seq, "seq": 100 + seq, "ts": "2026-10-27T00:00:00.000000Z",
-                      "type": typ, "data": data}}
+                      "tenant": "default", "log_id": "0" * 32, "type": typ, "data": data}}
 
 
 def net(host, st):
@@ -71,7 +71,7 @@ class CallOutcomes(unittest.TestCase):
                 records.append(result)
             g = Graph(None, "grade")
             graph._add_run(g, records, True, {1: {"file_path": "out.py", "url": "https://example.test/x"}})
-            return {(e["kind"], e["record"]["run_seq"]) for e in g.edges if e["src"] == "call:r-obs:c"}
+            return {(e["kind"], e["record"]["run_seq"]) for e in g.edges if e["src"] == "call:r-obs:d"}
 
         self.assertEqual(kinds(rec(2, "tool.result", {"tool_use_id": "c", "decision_id": "d", "ok": True})),
                          {("reported writing", 2), ("reported reaching", 2)})
@@ -90,24 +90,29 @@ class CallOutcomes(unittest.TestCase):
         g = Graph(None, "grade")
         graph._add_run(g, records, True, {1: {"url": "https://denied.example/x"},
                                           2: {"url": "https://allowed.example/x"}})
-        self.assertEqual({(e["dst"], e["kind"]) for e in g.edges if e["src"] == "call:r-obs:c"},
-                         {("host:denied.example", "asked to reach"), ("host:allowed.example", "reported reaching")})
+        self.assertEqual({(e["src"], e["dst"], e["kind"]) for e in g.edges if e["src"].startswith("call:")},
+                         {("call:r-obs:deny", "host:denied.example", "asked to reach"),
+                          ("call:r-obs:allow", "host:allowed.example", "reported reaching")})
 
         records[3] = rec(3, "tool.result", {"tool_use_id": "c", "decision_id": "allow", "ok": True})
         g = Graph(None, "grade")
         graph._add_run(g, records, True, {1: {"file_path": "/failed"}, 2: {"file_path": "/retried"}})
-        self.assertEqual({(e["dst"], e["kind"]) for e in g.edges if e["src"] == "call:r-obs:c"},
-                         {("file:/failed", "asked to write"), ("file:/retried", "reported writing")})
+        self.assertEqual({(e["src"], e["dst"], e["kind"]) for e in g.edges if e["src"].startswith("call:")},
+                         {("call:r-obs:deny", "file:/failed", "asked to write"),
+                          ("call:r-obs:allow", "file:/retried", "reported writing")})
 
     def test_missing_decision_ids_do_not_join(self):
         records = [rec(0, "run.registered", {"agent": {"name": "a"}}),
-                   rec(1, "policy.decision", {"tool_use_id": "bad", "tool": "Write", "decision": "deny"}),
-                   rec(2, "policy.decision", {"tool_use_id": "ok", "tool": "Write", "decision": "allow"}),
-                   rec(3, "tool.result", {"tool_use_id": "ok", "ok": True})]
+                   rec(1, "policy.decision", {"tool_use_id": "ok", "decision_id": "d", "tool": "Write",
+                                              "decision": "allow"}),
+                   rec(2, "tool.result", {"tool_use_id": "ok", "ok": True})]
         g = Graph(None, "grade")
-        graph._add_run(g, records, True, {1: {"file_path": "/etc/shadow"}, 2: {"file_path": "/tmp/fine"}})
+        graph._add_run(g, records, True, {1: {"file_path": "/tmp/fine"}})
         self.assertEqual({(e["dst"], e["kind"]) for e in g.edges if e["dst"].startswith("file:")},
-                         {("file:/etc/shadow", "asked to write"), ("file:/tmp/fine", "asked to write")})
+                         {("file:/tmp/fine", "asked to write")})
+        # a decision is its call's identity: one without the signer's decision id is no record graph reads
+        with self.assertRaisesRegex(ValueError, "decision_id"):
+            graph._graph_data({"type": "policy.decision", "data": {"tool_use_id": "bad", "decision": "deny"}})
 
     def test_later_result_hides_an_earlier_ask_from_reports_and_queries(self):
         records = [rec(0, "run.registered", {"agent": {"name": "a"}}),
@@ -158,7 +163,7 @@ class CallOutcomes(unittest.TestCase):
                              for e in r["matched"]), {"asked to write", "reported writing"})
 
         digest = next(e["args_digest"] for e in g.edges if e["kind"] == "asked to write")
-        g.add_edge("call:r-obs:c", "file:/repo/x", "reported writing", "UNVERIFIED",
+        g.add_edge("call:r-obs:first", "file:/repo/x", "reported writing", "UNVERIFIED",
                    record={"run_id": "r-obs", "run_seq": 4, "seq": 104, "ts": TS}, claimed="SIGNED",
                    args_commitment="one", args_digest=digest)
         doc["edges"] = g.edges
@@ -188,6 +193,58 @@ class CallOutcomes(unittest.TestCase):
         with mock.patch.object(graph, "_graph", return_value=g):
             graph.matching(doc, "file", "/repo/1")
         self.assertLessEqual(g.edges.visits, 3 * len(g.edges))
+
+    def test_an_approval_and_a_rule_stay_with_the_decision_they_were_for(self):
+        def at(seq, typ, data, attempt=0):
+            r = rec(seq, typ, data)
+            r["event"]["attempt"] = attempt
+            return r
+
+        def decided(seq, tcid, did, decision="ask", attempt=0):
+            return at(seq, "policy.decision", {"tool_use_id": tcid, "decision_id": did, "tool": "Write",
+                                               "decision": decision, "rule_ids": ["TK-A022"] * (decision == "ask")},
+                      attempt)
+
+        def approved(seq, tcid, did, aid):
+            return [at(seq, "approval.request", {"approval_id": aid, "decision_id": did, "rule_ids": ["TK-A022"],
+                                                 "binding": {"tool_call_id": tcid, "tool": "Write", "attempt": 0}}),
+                    at(seq + 1, "approval", {"tool_use_id": tcid, "approval_id": aid, "decision": "approve",
+                                             "approver": "alice", "self_approved": False})]
+
+        def ran(seq, tcid, did, ok=True, attempt=0):
+            return at(seq, "tool.result", {"tool_use_id": tcid, "decision_id": did, "ok": ok}, attempt)
+
+        held, backdoor, again, flaky = "/etc/docker/daemon.json", "/repo/src/backdoor.py", "/etc/sudoers", "/repo/f.py"
+        records = [rec(0, "run.registered", {"agent": {"name": "coder"}}),
+                   # t1: asked, approved and run; then its id reused for a write no person was asked about
+                   decided(1, "t1", "d1"), *approved(2, "t1", "d1", "apr-1"),
+                   at(4, "approval.consumed", {"approval_id": "apr-1"}), ran(5, "t1", "d1"),
+                   decided(6, "t1", "d2", "allow"), ran(7, "t1", "d2"),
+                   # t2: asked and approved, decided again with the same arguments (LangGraph's resume), run under that
+                   decided(8, "t2", "d3"), *approved(9, "t2", "d3", "apr-2"), decided(11, "t2", "d4"),
+                   at(12, "approval.consumed", {"approval_id": "apr-2"}), ran(13, "t2", "d4"),
+                   # t3: failed, and run as a new attempt: the signer's approval of one attempt covers no other
+                   decided(14, "t3", "d5", "allow"), ran(15, "t3", "d5", ok=False),
+                   decided(16, "t3", "d6", "allow", attempt=1), ran(17, "t3", "d6", attempt=1)]
+        args = {1: {"file_path": held, "content": "{}"}, 6: {"file_path": backdoor, "content": "import os"},
+                8: {"file_path": again, "content": "x"}, 11: {"file_path": again, "content": "x"},
+                14: {"file_path": flaky, "content": "y"}, 16: {"file_path": flaky, "content": "y"}}
+        g = Graph(None, "grade")
+        graph._add_run(g, records, True, args)
+        doc = {"schema_version": graph.SCHEMA_VERSION, "tracekit": "test", "content": True, "graphify": None,
+               "sources": [], "nodes": list(g.nodes.values()), "edges": g.edges}
+        sections = {s["id"]: s["items"] for s in graph.highlights(doc)["sections"]}
+        files = {i["node"]: i for i in sections["files"]}
+        sensitive = {i["node"]: i["text"] for i in sections["sensitive"]}
+        # the reused id's write: no rule held it, no person approved it
+        self.assertEqual(files["file:" + backdoor]["without_person"], 1)
+        self.assertNotIn("file:" + backdoor, sensitive)
+        self.assertEqual([a["note"] for a in graph.matching(doc, "file", "backdoor.py")["map"]["answers"]], [""])
+        self.assertTrue(sensitive["file:" + held].endswith("under TK-A022 ask (SIGNED); alice approved it (SIGNED)"))
+        # decided again with the same arguments: one call, approved, its first decision's ask not left over
+        self.assertEqual((files["file:" + again]["without_person"], files["file:" + again]["asked"]), (0, 0))
+        self.assertTrue(sensitive["file:" + again].endswith("under TK-A022 ask (SIGNED); alice approved it (SIGNED)"))
+        self.assertEqual((files["file:" + flaky]["reported"], files["file:" + flaky]["asked"]), (1, 1))
 
 
 class QueryInput(unittest.TestCase):
@@ -306,23 +363,25 @@ class ReviewRegressions(unittest.TestCase):
             self.assertIn("agent:good", {n["id"] for n in doc["nodes"]})
 
     def test_malformed_nested_event_makes_its_source_unreadable(self):
-        bads = [
-            {"event": {"run_id": "bad", "run_seq": 0, "type": "run.registered",
-                       "data": {"agent": "not an object"}}},
-            {"event": {"run_id": "bad", "run_seq": 0, "type": "tool.result",
-                       "data": {"decision_id": ["not", "a", "key"]}}},
-            {"event": {"run_id": "bad", "run_seq": 0, "type": "policy.decision", "data": {
-                "provenance": [{"source": {"run_seq": [1]}}]}}},
-            {"event": {"run_id": "bad", "run_seq": 0, "type": "review", "data": {
-                "cites": [{"run_seq": [1]}]}}},
-        ]
+        bads = [rec(0, typ, data, "bad") for typ, data in (
+            ("run.registered", {"agent": "not an object"}),
+            ("tool.result", {"decision_id": ["not", "a", "key"]}),
+            ("policy.decision", {"decision_id": "d", "provenance": [{"source": {"run_seq": [1]}}]}),
+            ("review", {"cites": [{"run_seq": [1]}]}))]
         for bad in bads:
             with self.subTest(bad=bad), \
                  mock.patch("tracekit.bundle_v2.run_files", return_value={"bad": ["runs/bad.jsonl"]}), \
                  mock.patch("tracekit.verify.v2.read_zip", return_value={"runs/bad.jsonl": b""}), \
                  mock.patch("tracekit.verify.v2._jsonl", return_value=[bad]):
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(ValueError, " data\\."):
                     graph._runs(b"bad")
+
+    def test_a_run_in_two_files_of_one_bundle_is_unreadable(self):
+        with mock.patch("tracekit.bundle_v2.run_files", return_value={"a": ["runs/a.jsonl"], "b": ["runs/b.jsonl"]}), \
+             mock.patch("tracekit.verify.v2.read_zip", return_value={"runs/a.jsonl": b"", "runs/b.jsonl": b""}), \
+             mock.patch("tracekit.verify.v2._jsonl", return_value=[rec(0, "run.registered", {}, "r")]):
+            with self.assertRaisesRegex(ValueError, "two files hold the run"):
+                graph._runs(b"bundle")
 
     def test_a_source_that_fails_while_building_does_not_partly_enter_the_graph(self):
         with tempfile.TemporaryDirectory() as d:
@@ -334,7 +393,8 @@ class ReviewRegressions(unittest.TestCase):
             good_src = {"name": "good.tkb", "sha256": "good", "verify": {"ok": True, "integrity": "ok", "failures": []}}
             # This bypasses _runs deliberately: staging also protects future graph readers from a missed validator.
             bad_runs = {"bad": [rec(0, "run.registered", {"agent": {"name": "bad"}}, "bad"),
-                                rec(1, "policy.decision", {"tool_use_id": "t", "tool": "Write", "decision": "allow",
+                                rec(1, "policy.decision", {"tool_use_id": "t", "decision_id": "d", "tool": "Write",
+                                                           "decision": "allow",
                                                            "provenance": [{"source": {"run_seq": []}}]}, "bad")]}
             good_runs = {"good": [rec(0, "run.registered", {"agent": {"name": "good"}}, "good")]}
             table = {bad_path: (bad_src, bad_runs), good_path: (good_src, good_runs)}
@@ -384,7 +444,46 @@ class ReviewRegressions(unittest.TestCase):
         split, together = self.split_and_together(runs_a, runs_b)
         for doc in (split, together):
             with self.subTest(sources=len(doc["sources"])):
-                self.assertEqual({n["id"]: n["label"] for n in doc["nodes"]}["call:r:c"], "Write")
+                self.assertEqual({n["id"]: n["label"] for n in doc["nodes"]}["call:r:d"], "Write")
+
+    def test_runs_of_two_tenants_or_logs_with_one_id_stay_apart(self):
+        def run_of(tenant, agent, log="0" * 32, rid="job-42", about=None):
+            recs = [rec(0, "run.registered", {"agent": {"name": agent}, **({"analyzes": about} if about else {})}, rid),
+                    dict(rec(1, "policy.decision", {"tool_use_id": "t1", "decision_id": "d1", "tool": "Write",
+                                                    "decision": "allow"}, rid), hash=tenant + log)]
+            for r in recs:
+                r["event"].update(tenant=tenant, log_id=log)
+            return {rid: recs}
+
+        finding = run_of("acme", "review", rid="fr", about="job-42")
+        verdict = {"kind": "finding", "rule": "TK-X", "severity": "high", "title": "t"}
+        cites = [{"run_seq": 1, "hash": "acme" + "0" * 32}]   # acme's job-42 decision
+        finding["fr"].append(rec(2, "review", {"verdict": verdict, "cites": cites}, "fr"))
+        finding["fr"][-1]["event"].update(tenant="acme", log_id="0" * 32)
+        table = {"acme.tkb": {**run_of("acme", "acme-payroll-bot"), **finding},
+                 "globex.tkb": {**run_of("globex", "globex-agent"), **run_of("globex", "globex-agent", rid="solo")},
+                 "other-log.tkb": run_of("acme", "elsewhere", log="1" * 32)}
+        read = []
+        with tempfile.TemporaryDirectory() as d:
+            trust = os.path.join(d, "trust.json")
+            with open(trust, "w") as f:
+                f.write("{}")
+            src = {n: {"name": n, "sha256": n, "verify": {"ok": True, "integrity": "ok", "failures": []}}
+                   for n in table}
+            with mock.patch.object(graph, "_read", side_effect=lambda p, *a: (src[os.path.basename(p)],
+                                                                               table[os.path.basename(p)])), \
+                 mock.patch.object(graph, "_add_why"):
+                doc = graph.build([os.path.join(d, n) for n in table], trust, lambda rid, recs: read.append(rid) or {})
+        acme, globex, other = (f"job-42@{t}@{log}" for t, log in (("acme", "0" * 32), ("globex", "0" * 32),
+                                                                  ("acme", "1" * 32)))
+        self.assertEqual(sorted(n["id"] for n in doc["nodes"] if n["kind"] == "run"),
+                         sorted(["run:fr", "run:solo", "run:" + acme, "run:" + globex, "run:" + other]))
+        self.assertEqual([r["run"] for r in graph.matching(doc, "agent", "globex-agent")["runs"]], ["solo", globex])
+        self.assertEqual({(e["src"], e["dst"]) for e in doc["edges"] if e["kind"] in ("analyses", "found in")},
+                         {("run:fr", "run:" + acme), ("finding:fr:2", f"call:{acme}:d1")})
+        # the vault finds a run by its id alone: a shared id's runs are not read from it, and the report says so
+        self.assertEqual(sorted(read), ["fr", "solo"])
+        self.assertIn(f"run {globex}: not read from the vault", graph.report(doc))
 
     def test_unverified_people_and_agents_do_not_describe_signed_answers(self):
         g = Graph(None, "grade")
@@ -788,10 +887,11 @@ class EndToEnd(unittest.TestCase):
         # the egress observer's: the run's, with what explains the host
         self.assertEqual(self.one(src=run, dst="host:docs.example.com", grade="OBSERVED")["explained_by"], "call")
         self.assertEqual(self.one(src=run, dst="host:telemetry.example.net")["explained_by"], "nothing")
-        denied, nodes = f"call:{self.session}:b1", {n["id"]: n for n in self.doc["nodes"]}
+        nodes = {n["id"]: n for n in self.doc["nodes"]}
+        [denied] = [n for n, v in nodes.items() if n.startswith(f"call:{self.session}:") and v["tool_use_id"] == "b1"]
         self.one(src="rule:TK-D007", dst=denied, kind="deny", grade="SIGNED")
         self.one(src=run, dst=denied, kind="decided deny", grade="SIGNED")
-        held = f"call:{self.session}:b2"
+        [held] = [n for n, v in nodes.items() if n.startswith(f"call:{self.session}:") and v["tool_use_id"] == "b2"]
         self.one(src="rule:TK-SHELL-PARSE", dst=held, kind="ask", grade="SIGNED")
         approval = self.one(src=held, kind="held for approval")["dst"]
         self.assertEqual(nodes[approval]["kind"], "approval")
@@ -1074,6 +1174,29 @@ class EndToEnd(unittest.TestCase):
                       "open the record's commitment", first)
         self.assertIn("4 calls in 1 run: their arguments were not read", first)
 
+    def test_a_forged_bundle_is_unreadable_and_queries_of_what_it_shares_still_answer(self):
+        rid = self.session.encode()
+
+        def retyped(fs, manifest):   # every ts a number, in a run of its own the real one's agent ran
+            fs.update({n: fs[n].replace(b'"ts":"', b'"ts":0,"tz":"').replace(rid, b"f" * len(rid))
+                       for n in fs if n.startswith("runs/")})
+
+        def split(fs, manifest):   # the run's later records name another run
+            for n in [n for n in fs if n.startswith("runs/")]:
+                first, *rest = fs[n].split(b"\n")
+                fs[n] = b"\n".join([first] + [x.replace(rid, b"e" * len(rid)) for x in rest])
+
+        for name, edit in (("retyped", retyped), ("split", split)):
+            with self.subTest(name):
+                forged, out = os.path.join(self.dir, name + ".tkb"), os.path.join(self.dir, "g-" + name)
+                rewrite_bundle(self.hook_tkb, forged, edit)
+                self.assertEqual(run("build", self.hook_tkb, forged, "--trust", self.trust, "--graphify", "", "-o",
+                                     out)[0], 0)
+                self.assertEqual(run("query", out, "--agent", "claude-code")[0], 0)
+                self.assertEqual(run("query", out, "--blast", "agent:claude-code")[0], 0)
+                with open(os.path.join(out, graph.GRAPH)) as f:
+                    self.assertIn("unreadable", next(s for s in json.load(f)["sources"] if s["name"] == name + ".tkb"))
+
     def test_a_file_that_is_not_a_graphify_graph_is_refused(self):
         bad = os.path.join(self.dir, "not-graphify.json")
         with open(bad, "w") as f:
@@ -1090,7 +1213,8 @@ class Records(unittest.TestCase):
         g = Graph(None, "grade")
         graph._add_run(g, [
             rec(0, "run.registered", {"agent": {"name": "coder"}}),
-            rec(1, "policy.decision", {"tool_use_id": "t1", "tool": "Edit", "decision": "allow", "rule_ids": []}),
+            rec(1, "policy.decision", {"tool_use_id": "t1", "decision_id": "d1", "tool": "Edit", "decision": "allow",
+                                       "rule_ids": []}),
             # the call id the process carried is the agent's claim: the file is the run's, not call t1's
             rec(2, "effect.observed", {"observer": "uid:0", "sensor": "tetragon", "kind": "file",
                                        "path": "/repo/src/billing.py", "tool_call_id": "t1"}),
@@ -1099,7 +1223,7 @@ class Records(unittest.TestCase):
                                          "port": 443, "denied": True}),
             rec(4, "capture.gap", {"kind": "hook_missing", "reason": "the hook did not run"}),
             rec(5, "run.child", {"run_id": "r-child"}),
-            rec(6, "approval.request", {"approval_id": "apr-1", "rule_ids": ["TK-A020"],
+            rec(6, "approval.request", {"approval_id": "apr-1", "decision_id": "d1", "rule_ids": ["TK-A020"],
                                         "binding": {"tool_call_id": "t1", "tool": "Edit"}}),
             rec(7, "approval.expired", {"approval_id": "apr-1", "reason": "ttl"}),   # names no call: the request does
         ], True)
@@ -1113,8 +1237,8 @@ class Records(unittest.TestCase):
         self.assertEqual([e["kind"] for e in g.edges if e["dst"] in ("gap:r-obs:4", "run:r-child")],
                          ["recorded", "started"])
         self.assertEqual([(e["src"], e["dst"], e["kind"]) for e in g.edges if "approval:apr-1" in (e["src"], e["dst"])],
-                         [("call:r-obs:t1", "approval:apr-1", "held for approval"),
-                          ("approval:apr-1", "call:r-obs:t1", "expired (ttl)")])
+                         [("call:r-obs:d1", "approval:apr-1", "held for approval"),
+                          ("approval:apr-1", "call:r-obs:d1", "expired (ttl)")])
         res = graph.matching(doc, "file", "billing.py")
         [r] = res["runs"]
         self.assertEqual((r["run"], [e["dst"] for e in r["host"]]),
@@ -1124,20 +1248,22 @@ class Records(unittest.TestCase):
 
     def test_what_a_call_decided_and_did_comes_from_verified_records_only(self):
         g = Graph(None, "grade")
-        deny = {"tool_use_id": "t1", "tool": "Bash", "decision": "deny", "rule_ids": ["TK-D001"]}
+        deny = {"tool_use_id": "t1", "decision_id": "d1", "tool": "Bash", "decision": "deny", "rule_ids": ["TK-D001"]}
         graph._add_run(g, [rec(0, "run.registered", {}), rec(1, "policy.decision", deny)], True)
         graph._add_run(g, [rec(0, "run.registered", {}), rec(1, "policy.decision", dict(deny, decision="allow")),
-                           rec(2, "tool.result", {"tool_use_id": "t1", "ok": True})], False)   # a tampered copy
-        self.assertEqual({k: v for k, v in g.nodes["call:r-obs:t1"].items() if k in ("decision", "ok")},
+                           rec(2, "tool.result", {"tool_use_id": "t1", "decision_id": "d1", "ok": True})],
+                       False)   # a tampered copy
+        self.assertEqual({k: v for k, v in g.nodes["call:r-obs:d1"].items() if k in ("decision", "ok")},
                          {"decision": "deny"})
-        self.assertEqual(sorted((e["kind"], e["grade"]) for e in g.edges if e["dst"] == "call:r-obs:t1"),
+        self.assertEqual(sorted((e["kind"], e["grade"]) for e in g.edges if e["dst"] == "call:r-obs:d1"),
                          [("allow", "UNVERIFIED"), ("decided allow", "UNVERIFIED"), ("decided deny", "SIGNED"),
                           ("deny", "SIGNED")])
 
     def test_graphify_links_a_file_to_the_code_of_its_longest_matching_path(self):
         g = Graph(None, "grade")
         graph._add_run(g, [rec(0, "run.registered", {"agent": {"name": "coder"}}),
-                           rec(1, "policy.decision", {"tool_use_id": "t1", "tool": "Write", "decision": "allow",
+                           rec(1, "policy.decision", {"tool_use_id": "t1", "decision_id": "d1", "tool": "Write",
+                                                      "decision": "allow",
                                                       "args_commitment": "hmac-sha256:" + "0" * 64})],
                        True, {1: {"file_path": "/repo/app/src/billing.py", "content": "x"}})
         d = tempfile.mkdtemp()

@@ -94,7 +94,8 @@ def _graph_data(e: Dict[str, Any]) -> None:
         string(d.get("run_id"), "run_id")
     elif t == "policy.decision":
         strings(d.get("rule_ids"), "rule_ids")
-        string(d.get("decision_id"), "decision_id")
+        if not isinstance(d.get("decision_id"), str):   # its call's identity (_calls): the signer writes one always
+            raise ValueError("policy.decision data.decision_id must be a string")
         provenance = d.get("provenance")
         if provenance is not None:
             if not isinstance(provenance, list) or not all(isinstance(p, dict) for p in provenance):
@@ -106,6 +107,7 @@ def _graph_data(e: Dict[str, Any]) -> None:
     elif t == "approval.request":
         obj(d.get("binding"), "binding")
         strings(d.get("rule_ids"), "rule_ids")
+        string(d.get("decision_id"), "decision_id")
     elif t == "tool.result":
         string(d.get("decision_id"), "decision_id")
     elif t == "effect.observed":
@@ -160,13 +162,18 @@ def _runs(data: bytes) -> Dict[str, List[Dict[str, Any]]]:
             raise ValueError("a run has no records")
         for r in recs:
             e = r.get("event") if isinstance(r, dict) else None
-            if not (isinstance(e, dict) and isinstance(e.get("run_id"), str)
-                    and isinstance(e.get("run_seq"), int) and not isinstance(e["run_seq"], bool)
-                    and isinstance(e.get("type"), str)
+            if not (isinstance(e, dict) and all(isinstance(e.get(k), str) for k in ("run_id", "type", "ts", "tenant",
+                                                                                     "log_id"))
+                    and all(isinstance(e.get(k), int) and not isinstance(e[k], bool) for k in ("run_seq", "seq"))
                     and ("data" not in e or isinstance(e["data"], dict))):
-                raise ValueError("a record must have string run_id and type, integer run_seq, and object data")
+                raise ValueError("a record must have string run_id, type, ts, tenant and log_id, integer run_seq and "
+                                 "seq, and object data")
             _graph_data(e)
-        runs[recs[0]["event"]["run_id"]] = recs
+        # as the verifier's run chain: one run per file, every record naming it (else a citation names no run node)
+        run = [(e["log_id"], e["tenant"], e["run_id"]) for e in (r["event"] for r in recs)]
+        if run.count(run[0]) != len(run) or run[0][2] in runs:
+            raise ValueError(f"run {run[0][2]!r}: a run file holds another run's records, or two files hold the run")
+        runs[run[0][2]] = recs
     return runs
 
 
@@ -225,10 +232,29 @@ def _edge(g: Graph, ok: bool, src: str, dst: str, kind: str, grade: str, cite: D
                **({} if ok else {"claimed": grade}))
 
 
-def _of(g: Graph, e: Dict[str, Any]) -> str:
-    """The node of record `e`: its call's for a decision, result or approval, its input's, else its run's."""
+def _calls(recs: List[Dict[str, Any]], args: Optional[Dict[int, Any]] = None) -> Dict[str, str]:
+    """decision id -> its call node, call:RUN:DECISION_ID, of one run's records: a node per decision, since an agent may
+    reuse a tool call id for another action. A decision made again under the same tool call id and attempt with the
+    same decided arguments (`args`, opened from the vault) is the same action, its first decision's node: LangGraph
+    decides again on resume, and the signer's one approval of a call attempt covers both."""
+    calls: Dict[str, str] = {}
+    first: Dict[tuple, str] = {}
+    for r in recs:
+        e = r["event"]
+        if e["type"] == "policy.decision":
+            did, body = e["data"]["decision_id"], (args or {}).get(e["run_seq"])
+            calls[did] = f"call:{e['run_id']}:{did}" if body is None else first.setdefault(
+                (e["data"].get("tool_use_id"), e.get("attempt"), _args_digest(body)), f"call:{e['run_id']}:{did}")
+    return calls
+
+
+def _of(g: Graph, e: Dict[str, Any], calls: Optional[Dict[str, str]] = None) -> str:
+    """The node of record `e`: its decision's call for a decision or result (`calls`: _calls of its run), its
+    approval's for an approval, its input's, else its run's."""
     d = e.get("data") or {}
-    nid = (f"call:{e['run_id']}:{d.get('tool_use_id')}" if e["type"] in ("policy.decision", "tool.result", "approval")
+    did = d.get("decision_id") if e["type"] in ("policy.decision", "tool.result") else None
+    nid = ((calls or {}).get(did) or f"call:{e['run_id']}:{did}" if did
+           else "approval:" + str(d.get("approval_id")) if e["type"] == "approval"
            else f"input:{e['run_id']}:{e['run_seq']}" if e["type"] == "input.observed" else "")
     committed = getattr(g, "_committed_nodes", {})
     for n in (nid, "run:" + e["run_id"]):
@@ -243,6 +269,33 @@ def _about(recs: List[Dict[str, Any]]) -> Optional[str]:
     """The run a findings run analyses, or None."""
     first = recs[0]["event"]
     return (first.get("data") or {}).get("analyzes") if first["type"] == "run.registered" else None
+
+
+def _named_runs(recs: List[Dict[str, Any]]) -> List[str]:
+    """The run ids one run's records name: its own, the run it analyses and its child runs, all of its tenant."""
+    children = [(r["event"].get("data") or {}).get("run_id") for r in recs if r["event"]["type"] == "run.child"]
+    return [x for x in [recs[0]["event"]["run_id"], _about(recs), *children] if x]
+
+
+def _qualified(recs: List[Dict[str, Any]], shared: set) -> List[Dict[str, Any]]:
+    """`recs` as the graph names runs: each run id they name (_named_runs) that runs of other tenants or logs have too
+    (`shared`) as RUN_ID@TENANT@LOG_ID; `recs` itself when they name none."""
+    first = recs[0]["event"]
+    if not shared.intersection(_named_runs(recs)):
+        return recs
+
+    def name(rid: str) -> str:
+        return f"{rid}@{first.get('tenant')}@{first.get('log_id')}" if rid in shared else rid
+    out = []
+    for r in recs:
+        e = dict(r["event"], run_id=name(r["event"]["run_id"]))
+        d = e.get("data") or {}
+        if e["type"] == "run.registered" and d.get("analyzes"):
+            e["data"] = dict(d, analyzes=name(d["analyzes"]))
+        elif e["type"] == "run.child" and d.get("run_id"):
+            e["data"] = dict(d, run_id=name(d["run_id"]))
+        out.append(dict(r, event=e))
+    return out
 
 
 def _written(tool: Any, args: Any) -> List[str]:
@@ -288,6 +341,7 @@ def _add_run(g: Graph, recs: List[Dict[str, Any]], ok: bool, args: Optional[Dict
     results = {r["event"]["data"]["decision_id"]: r["event"] for r in recs
                if r["event"]["type"] == "tool.result" and r["event"]["data"].get("ok")
                and r["event"]["data"].get("decision_id")}
+    calls = _calls(recs, args)
     by_seq: Dict[int, str] = {}   # run_seq -> the node of the record that brought a value into the run
     asked: Dict[str, str] = {}    # approval id -> the call it is for (a later approval record may not name it)
     unread = 0
@@ -309,7 +363,7 @@ def _add_run(g: Graph, recs: List[Dict[str, Any]], ok: bool, args: Optional[Dict
             _edge(g, ok, run, by_seq[e["run_seq"]], "observed " + str(d.get("trust")), "SIGNED", at)
         elif t == "policy.decision":
             # what a call's decision and result were: from verified records only (a node's label is any record's)
-            call = _node(g, f"call:{rid}:{d.get('tool_use_id')}", "call", str(d.get("tool")),
+            call = _node(g, calls[d["decision_id"]], "call", str(d.get("tool")), tool_use_id=d.get("tool_use_id"),
                          **({"decision": d.get("decision")} if ok else {}))
             _edge(g, ok, run, call, "decided " + str(d.get("decision")), "SIGNED", at)
             for rule in d.get("rule_ids") or []:
@@ -336,18 +390,17 @@ def _add_run(g: Graph, recs: List[Dict[str, Any]], ok: bool, args: Optional[Dict
                       "reached" if attested else "reported reaching" if done else "asked to reach", "SIGNED", result_at,
                       args_digest=_args_digest(body),
                       **({"args_commitment": d["args_commitment"]} if d.get("args_commitment") else {}))
-        elif t == "tool.result":
-            by_seq[e["run_seq"]] = _node(g, f"call:{rid}:{d.get('tool_use_id')}", "call", "?",
+        elif t == "tool.result" and d.get("decision_id") in calls:   # its decision's, as the verifier joins them
+            by_seq[e["run_seq"]] = _node(g, calls[d["decision_id"]], "call", "?",
                                          **({"ok": bool(d.get("ok"))} if ok else {}))
-        elif t == "approval.request":
+        elif t == "approval.request":   # for the decision it binds; an approval record names only a tool call id
             b, aid = d.get("binding") or {}, str(d.get("approval_id"))
-            asked[aid] = _node(g, f"call:{rid}:{b.get('tool_call_id')}", "call", str(b.get("tool")))
+            asked[aid] = calls.get(d.get("decision_id"), run)
             _edge(g, ok, asked[aid], _node(g, "approval:" + aid, "approval", f"approval of {b.get('tool')}"),
                   "held for approval", "SIGNED", at, rule_ids=d.get("rule_ids") or [])
         elif t == "approval":
             who = str(d.get("approver"))
-            _edge(g, ok, _node(g, "person:" + who, "person", who), _node(g, f"call:{rid}:{d.get('tool_use_id')}",
-                                                                          "call", "?"),
+            _edge(g, ok, _node(g, "person:" + who, "person", who), asked.get(str(d.get("approval_id")), run),
                   str(d.get("decision")), "SIGNED", at, self_approved=bool(d.get("self_approved")),
                   **({"wait_ms": d["wait_ms"]} if isinstance(d.get("wait_ms"), int) else {}),
                   **({"approval_id": d["approval_id"]} if d.get("approval_id") else {}))
@@ -377,6 +430,8 @@ def _add_run(g: Graph, recs: List[Dict[str, Any]], ok: bool, args: Optional[Dict
             for c, x in cited:
                 if not x or x.get("hash") != c.get("hash"):
                     continue
+                # lean: without the cited run's vault arguments, a decision made again (_calls: its first decision's
+                # call) names no node, so the finding is about the run; pass that run's _calls if findings cite those
                 cited_nodes.add(_of(g, x["event"]))
             for n in sorted(cited_nodes) or [
                     _node(g, "run:" + str(about), "run", str(about))]:
@@ -388,19 +443,21 @@ def _add_run(g: Graph, recs: List[Dict[str, Any]], ok: bool, args: Optional[Dict
                       effect=d.get("effect"))
             _edge(g, ok, f, _node(g, "run:" + about, "run", about), "tested " + str(d.get("verdict")), "SIGNED", at)
         for rule in (d.get("redaction") or {}).get("rules") or []:
-            _edge(g, ok, _of(g, e), _node(g, "secret:" + rule, "secret", rule), "held a secret (redacted)", "SIGNED",
-                  at)
+            _edge(g, ok, _of(g, e, calls), _node(g, "secret:" + rule, "secret", rule), "held a secret (redacted)",
+                  "SIGNED", at)
     if ok and unread:
         g.nodes[run]["unread_args"] = unread
 
 
-def _add_why(g: Graph, recs: List[Dict[str, Any]], ok: bool, tests=()) -> None:
+def _add_why(g: Graph, recs: List[Dict[str, Any]], ok: bool, tests=(), args: Optional[Dict[int, Any]] = None) -> None:
     """INFERRED edges: tracekit why's causal graph of the run, mapped onto this graph's nodes, and the signed why tests
     about the run (`tests`: (why.finding record, whether its source verified)) whose verdict is causal or
-    suppressive, from what the test removed to the calls of its target."""
+    suppressive, from what the test removed to the calls of its target. `args`: as _add_run's, for the call nodes."""
     from .why.core import load_run
     from .why.graph import build_graph, nodes_matching, target_hits
     from .why.import_v2 import convert
+    calls = _calls(recs, args)
+    decided = {r["event"]["run_seq"]: (r["event"].get("data") or {}).get("decision_id") for r in recs}
     with tempfile.TemporaryDirectory() as d:
         wrun = load_run(convert(recs, d, {}))
         wg = build_graph(wrun)
@@ -408,8 +465,8 @@ def _add_why(g: Graph, recs: List[Dict[str, Any]], ok: bool, tests=()) -> None:
         def ours(nid: str) -> Optional[str]:
             ev = wg.nodes[nid]["event"]
             c = ev.get("tracekit") or {}
-            if ev["type"] == "action":
-                return f"call:{c['run_id']}:{c['tool_call_id']}"
+            if ev["type"] == "action":   # it cites its result, or its decision when it did not run
+                return calls.get(decided.get(c["run_seq"]))
             if ev["type"] == "input":
                 return f"input:{c['run_id']}:{c['run_seq']}"
             if ev["type"] == "decision":
@@ -516,6 +573,13 @@ def build(paths: List[str], trust: str, content: Optional[Content] = None,
     source_data = _source_data or {}
     read = sorted((_read(p, trust, source_data[p]) if p in source_data else _read(p, trust) for p in paths),
                   key=lambda s: (not s[0]["verify"]["ok"], s[0]["sha256"], s[0]["name"]))
+    owners: Dict[str, set] = {}   # run id -> the (tenant, log id)s it names a run in: it is unique only within one
+    for _, rs in read:
+        for recs in rs.values():
+            for rid in _named_runs(recs):
+                owners.setdefault(rid, set()).add((recs[0]["event"].get("tenant"), recs[0]["event"].get("log_id")))
+    shared = {rid for rid, o in owners.items() if len(o) > 1}
+    read = [(src, {rid: _qualified(recs, shared) for rid, recs in rs.items()}) for src, rs in read]
     runs = sorted(((src, rs[rid]) for src, rs in read for rid in sorted(rs)), key=lambda x: bool(_about(x[1])))
     index: Dict[tuple, Dict[str, Any]] = {}
     tests: Dict[str, List[tuple]] = {}   # run_id -> the why.finding records about it
@@ -532,13 +596,17 @@ def build(paths: List[str], trust: str, content: Optional[Content] = None,
         try:
             for rid in sorted(rs, key=lambda rid: bool(_about(rs[rid]))):
                 recs, ok, args = rs[rid], src["verify"]["ok"], None
-                if content and ok:
+                if content and ok and rid in shared:   # the vault finds a run by its id, in the builder's own tenant
+                    src.setdefault("content_unread", []).append(
+                        f"run {recs[0]['event']['run_id']}: not read from the vault: runs of other tenants or logs "
+                        "in this graph have its id; build each tenant's graph as an identity of that tenant")
+                elif content and ok:
                     try:
                         args = content(rid, recs)
                     except Exception as e:   # the vault's content does not open its record, or the signer gives none
                         src.setdefault("content_unread", []).append(f"run {rid}: {type(e).__name__}: {e}")
                 _add_run(staged, recs, ok, args, index)
-                _add_why(staged, recs, ok, tests.get(rid, ()))
+                _add_why(staged, recs, ok, tests.get(recs[0]["event"]["run_id"], ()), args)
         except Exception as e:
             src["unreadable"] = f"{type(e).__name__}: {e}"
         else:

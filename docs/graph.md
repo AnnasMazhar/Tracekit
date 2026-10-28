@@ -28,13 +28,16 @@ Parent directories may be symlinks.
 
 `tracekit graph build SOURCES... --trust trust.json [--content] [--graphify FILE] [-o DIR]` reads v2 `.tkb`
 bundles and verifies each one against the trust configuration. A readable bundle that fails verification stays in the
-graph: its edges are `UNVERIFIED`, rather than being dropped.
+graph: its edges are `UNVERIFIED`, rather than being dropped. A bundle the graph can't read is listed in `sources`
+with `unreadable` and adds no runs: one whose records lack a field the graph reads or give it the wrong type, or whose
+run file holds another run's records, or holds a run another of its files holds.
 
 `--content` reads decided call arguments from the signer's content vault (`$TRACEKIT_SIGNER`, or the dev signer).
 The bundle holds a commitment to those arguments, not the arguments themselves. Without `--content`, the graph cannot
 make file and host edges from call arguments; it can still include signed provenance edges and observer edges. The
 build output and report state how many call arguments were not read. Each vault read opens the record's commitment and
-is recorded by the signer as `content.accessed`.
+is recorded by the signer as `content.accessed`. The vault finds a run by its id in the builder's own tenant, so a run
+whose id other tenants' or logs' runs in the graph share is not read; the report says so.
 
 A `wrote` or `reached` edge needs a successful T2 executor or gateway result for that decision. A successful result
 from another tier produces `reported writing` or `reported reaching`. With decided arguments but no successful result,
@@ -55,7 +58,7 @@ also carry these fields:
 | run | `run:RUN_ID` | `ts`; `unread_args` when arguments were not read |
 | agent | `agent:NAME` | |
 | person | `person:APPROVER` | |
-| call | `call:RUN_ID:TOOL_USE_ID` | `decision` and `ok`, from verified records only |
+| call | `call:RUN_ID:DECISION_ID` | `tool_use_id`; `decision` and `ok`, from verified records only |
 | input | `input:RUN_ID:RUN_SEQ` | `trust` |
 | model | `model:RUN_ID:RUN_SEQ` | |
 | file | `file:PATH` | |
@@ -69,11 +72,21 @@ also carry these fields:
 
 The first record that names a node supplies its label and fields. Verified sources are considered first.
 
+A call is one signer decision (its `decision_id`), not a tool call id: an agent may reuse a tool call id for another
+action. A result joins the decision it names, and an approval joins the decision its `approval.request` binds, as the
+verifier joins them. A decision made again under the same tool call id and attempt with the same decided arguments
+(read with `--content`) is the same call as the first: LangGraph decides again when it resumes after an approval, and
+the signer's one approval of a call attempt covers both. Without `--content` each decision is a call of its own.
+
+A run id is unique only within one tenant of one signer log. When runs of other tenants or logs in the graph have the
+same id, each of those runs is `RUN_ID@TENANT@LOG_ID` instead of `RUN_ID`, in node ids, labels and edge records.
+
 ### Edges and grades
 
 Every edge has `src`, `dst`, `kind`, `grade`, and `record`. A record from a bundle is
-`{"run_id", "run_seq", "seq", "ts"}`. A Graphify join instead records `{"graphify", "source_file"}`. An
-`UNVERIFIED` edge also has `claimed`, the grade it would have had from a verified source.
+`{"run_id", "run_seq", "seq", "ts"}`, its `run_id` the run's name in the graph (above). A Graphify join instead records
+`{"graphify", "source_file"}`. An `UNVERIFIED` edge also has `claimed`, the grade it would have had from a verified
+source.
 
 | Grade | Source | Edges |
 |---|---|---|

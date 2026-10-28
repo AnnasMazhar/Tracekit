@@ -62,9 +62,11 @@ tracekit graph query tracekit-graph --path agent:codex host:api.stripe.com   # s
 Exit 1 means nothing matched; 2 means a bad node or graph. For a question no mode answers, read graph.json with
 `jq` or a short script:
 
-- nodes: `{id, kind, label, ...}`; ids are `run:RUN`, `agent:NAME`, `person:WHO`, `call:RUN:TOOL_USE_ID`,
+- nodes: `{id, kind, label, ...}`; ids are `run:RUN`, `agent:NAME`, `person:WHO`, `call:RUN:DECISION_ID`,
   `input:RUN:SEQ`, `model:RUN:SEQ`, `file:PATH`, `host:HOST`, `secret:RULE`, `rule:TK-...`, `finding:RUN:SEQ`,
-  `approval:ID`, `gap:RUN:SEQ`, `code:GRAPHIFY_ID`. A call node may carry `decision` and `ok`.
+  `approval:ID`, `gap:RUN:SEQ`, `code:GRAPHIFY_ID`. A call is one signer decision, so one tool call id can have
+  several call nodes (its `tool_use_id`); it may carry `decision` and `ok`. `RUN` is `RUN_ID@TENANT@LOG_ID` where runs
+  of other tenants or logs in the graph share the run id.
 - edges: `{src, dst, kind, grade, record: {run_id, run_seq, seq}, ...}`; kinds include `ran`, `decided allow|deny|ask|flag`,
   a rule's `allow|deny|ask|flag`, `wrote`, `reported writing`, `asked to write`, `reached`, `reported reaching`,
   `asked to reach`, `held for approval`,
