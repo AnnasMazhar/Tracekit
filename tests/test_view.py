@@ -1391,6 +1391,44 @@ class WhyData(WhyServer):
         self.assertEqual((rows["ev:" + run.events[0]["id"]]["hash"], rows["ev:" + run.events[1]["id"]]["prev"]),
                          (None, None))
 
+    def test_every_event_shape_analyse_takes_is_on_the_tape(self):
+        """analyse() takes a why log whose events miss fields the tape read with [] (no ts, seq or agent, an input
+        without source or trust, a decision without model or output, a message without ref): tape() raised KeyError,
+        so none of the run's rows reached the page."""
+        from tracekit.why.analysis import analyse
+        base = SYSTEM.run(seed=0, out_dir=self.store.root, run_id="t4").path
+        events = load_run(base).events
+        for t, k in (("run.start", "agent"), ("run.start", "seq"), ("agent.start", "seq"), ("agent.start", "ts"),
+                     ("input", "source"), ("input", "trust"), ("input", "ts"), ("decision", "model"),
+                     ("decision", "output"), ("decision", "ts"), ("action", "ts"), ("message", "ref"),
+                     ("message", "ts"), ("run.end", "agent"), ("run.end", "seq"), ("run.end", "ts")):
+            with self.subTest(type=t, field=k):
+                i = next(n for n, e in enumerate(events) if e["type"] == t)
+                path = os.path.join(self.tmp, f"shape-{t}-{k}")
+                shutil.copytree(base, path)
+                with open(os.path.join(path, "events.jsonl"), "w") as f:
+                    f.writelines(json.dumps({x: v for x, v in e.items() if (n, x) != (i, k)}) + "\n"
+                                 for n, e in enumerate(events))
+                run = analyse(path)["run"]   # analyse() takes it
+                self.assertIn("ev:" + events[i]["id"], {r["why"]["node"] for r in tape(run)})
+
+    def test_one_run_the_scan_cannot_read_never_hides_the_runs_after_it(self):
+        """scan() had no try per run: a log whose tape raised (one being written, an event it could not read) ended the
+        scan there, and every run sorted after it was never published."""
+        root, feed, real = os.path.join(self.tmp, "s"), WhyFeed(), tape
+        SYSTEM.run(seed=0, out_dir=root, run_id="a-bad")
+        SYSTEM.run(seed=0, out_dir=root, run_id="b-good")
+        store = Store(root, out=feed, tape=True, ingest=False)
+
+        def broken(run, start=0):
+            if run.run_id == "a-bad":
+                raise KeyError("ts")
+            return real(run, start)
+        with mock.patch("tracekit.why.server.tape", broken):
+            store.scan()
+        self.assertTrue(any(r.get("session_id") == "b-good" for r in feed.records))
+        self.assertFalse(any(r.get("session_id") == "a-bad" for r in feed.records))
+
     def test_a_why_log_the_tape_cannot_read_never_stops_the_watcher(self):
         """The first scan ran outside the watcher's try: a run whose tape raised there ended the thread, and no later
         run was published for the server's life."""
