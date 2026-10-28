@@ -184,7 +184,7 @@ class CentralViewer(unittest.TestCase):
         pg.sql(self.admin1, "UPDATE tracekit_records SET record = regexp_replace(record::text, '\"tool\": ?\"Bash\"', "
                "'\"tool\":\"Bosh\"')::json WHERE run_id = %s", (self.ids["a2"],))
         self.assertIn("a2", self.listed("?verdict=verified", self.acme))   # the last check's verdict, until it is old
-        with mock.patch.object(view.time, "time", return_value=time.time() + view.RECHECK_S + 1):
+        with mock.patch.object(view.time, "monotonic", return_value=time.monotonic() + view.RECHECK_S + 1):
             self.assertEqual(self.listed("?verdict=failed", self.acme), ["a2"])
 
     def test_a_list_checks_a_run_only_with_a_check_slot_free(self):
@@ -201,7 +201,7 @@ class CentralViewer(unittest.TestCase):
         for r in (runs, fresh):
             r.listing.acquire()
         with mock.patch.object(view, "check", wraps=view.check) as checked, \
-                mock.patch.object(view.time, "time", return_value=time.time() + view.RECHECK_S + 1):
+                mock.patch.object(view.time, "monotonic", return_value=time.monotonic() + view.RECHECK_S + 1):
             self.assertEqual(listed(port), dict.fromkeys(kept, "NOT CHECKED"))
             self.assertEqual(listed(fresh_port), dict.fromkeys(kept, "NOT CHECKED"))
         self.assertEqual(checked.call_count, 0)
@@ -211,10 +211,10 @@ class CentralViewer(unittest.TestCase):
         """With the list's check slot taken, a VERIFIED past RECHECK_S still showed VERIFIED after the run's records
         were edited in place. It reads NOT CHECKED; a kept FAILED stays FAILED, and one within RECHECK_S shows as is."""
         runs = view.Runs(self.files)
-        port, t0 = self.serve(runs), time.time()
+        port, t0 = self.serve(runs), time.monotonic()
 
         def a2(now):
-            with mock.patch.object(view.time, "time", return_value=now):
+            with mock.patch.object(view.time, "monotonic", return_value=now):
                 listed = json.loads(self.get("/api/runs", self.admin, port)[2])["runs"]
             return next(r["verdict"]["integrity"] for r in listed if r["run_id"] == self.ids["a2"])
         self.assertEqual(a2(t0), "VERIFIED")
@@ -269,6 +269,26 @@ class CentralViewer(unittest.TestCase):
         self.assertLessEqual(set(self.ids.values()), {run_id for run_id, _ in checked})
         self.assertEqual(sorted(checked), sorted(set(checked)))   # one check per run
         self.assertEqual(len(checked), after)   # the second list checked nothing
+
+    @pytest.mark.unverified_bundles
+    def test_a_clock_stepped_back_never_keeps_a_stale_verified(self):
+        """Verdicts were kept by the wall clock: after it stepped back (an NTP step, a manual change), a run page's
+        FAILED was older than the list's VERIFIED and wasn't kept, and lists showed VERIFIED for the step plus
+        RECHECK_S."""
+        runs = view.Runs(self.files)
+        port = self.serve(runs)
+
+        def listed(query, cookie):
+            status, _, body = self.get("/api/runs" + query, cookie, port)
+            self.assertEqual(status, 200, body)
+            return [self.names.get(r["run_id"], r["run_id"]) for r in json.loads(body)["runs"]]
+        self.assertIn("a2", listed("?verdict=verified", self.acme))
+        pg.sql(self.admin1, "UPDATE tracekit_records SET record = regexp_replace(record::text, '\"tool\": ?\"Bash\"', "
+               "'\"tool\":\"Bosh\"')::json WHERE run_id = %s", (self.ids["a2"],))
+        with mock.patch.object(view.time, "time", return_value=time.time() - 3600):   # the clock steps back an hour
+            status, _, body = self.get(f"/api/run?log=1&tenant=acme&run={self.ids['a2']}", self.acme, port)
+            self.assertEqual((status, json.loads(body)["verdict"]["verdict"]), (200, "failed"))
+            self.assertEqual(listed("?verdict=failed", self.acme), ["a2"])
 
     @pytest.mark.unverified_bundles
     def test_a_lists_check_of_an_older_snapshot_never_replaces_a_newer_verdict(self):

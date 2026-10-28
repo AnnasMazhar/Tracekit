@@ -1310,7 +1310,7 @@ class Runs:
     def _open(self, i):
         """A reader of log `i`, its latest record note (size, note) or None, and the time before the reader took its
         snapshot, which a verdict checked on it is as of: the reader holds what the note covers."""
-        at = time.time()
+        at = time.monotonic()   # never stepped back, as the wall clock can be
         r = self.pg.PostgresReader(self.logs[i][0])
         try:
             return r, r.checkpoint_latest(), at
@@ -1343,7 +1343,7 @@ class Runs:
         key = (i, tenant, run_id, len(run["seqs"]))
         with self._lock:
             v, kept = self._verdicts.get(key, (None, 0)) if cached else (None, 0)
-        if v is None or time.time() >= kept + RECHECK_S:
+        if v is None or time.monotonic() >= kept + RECHECK_S:
             if cached and not self.listing.acquire(blocking=False):
                 return v if v and v["verdict"] == "failed" else {
                     "verdict": "pending", "integrity": "NOT CHECKED", "assurance": "none", "label": OPERATOR_SIDE,
@@ -1353,7 +1353,7 @@ class Runs:
                 if cached:   # another list may have checked it since
                     with self._lock:
                         v, kept = self._verdicts.get(key, (None, 0))
-                if v is None or time.time() >= kept + RECHECK_S:
+                if v is None or time.monotonic() >= kept + RECHECK_S:
                     fd, out = tempfile.mkstemp(suffix=".tkb", dir=self.tmp)   # requests run concurrently: a file each
                     os.close(fd)
                     try:
