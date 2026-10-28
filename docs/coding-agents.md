@@ -11,7 +11,7 @@ tracekit init --dev --agent droid      # ~/.factory/hooks.json
 tracekit init --dev --agent opencode   # $XDG_CONFIG_HOME (or ~/.config)/opencode/plugin/tracekit.js; system mode: the agent's ~/.config
 tracekit init --dev --agent goose      # ~/.agents/plugins/tracekit/hooks/hooks.json (plus plugin.json beside it)
 tracekit init --dev --agent antigravity   # ~/.gemini/config/hooks.json (see Antigravity CLI below)
-# --project writes the project-level file instead; tracekit uninstall --agent X removes it
+# --project writes the project-level file instead; tracekit uninstall --agent X removes Tracekit's hooks and keeps your other settings
 tracekit demo --agent codex            # the scripted demo, sent as Codex's own hook payloads (also cursor, gemini)
 ```
 
