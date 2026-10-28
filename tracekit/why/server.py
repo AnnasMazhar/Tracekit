@@ -121,8 +121,9 @@ def tape(run, start: int = 0) -> List[Dict[str, Any]]:
             ts = {"ts": ts_seconds(ev["ts"])}
         except ValueError:   # load_run does not check a log's ts: shown as now, and HORIZON sorts it oldest
             ts = {"ts": time.time(), "ts_unread": True}
-        r = {**ts, "session_id": run.run_id, "seq": ev["seq"], "hash": ev["hash"],
-             "prev": ev["prev_hash"], "why": {"run": run.run_id, "node": "ev:" + ev["id"]}, **_agent(ev)}
+        # analyse() takes an event without hash or prev_hash (the chain check lists it): shown without them
+        r = {**ts, "session_id": run.run_id, "seq": ev["seq"], "hash": ev.get("hash"),
+             "prev": ev.get("prev_hash"), "why": {"run": run.run_id, "node": "ev:" + ev["id"]}, **_agent(ev)}
         if t == "run.start":
             out.append({**r, "event": "SessionStart", "source": f"why log · {ev.get('program') or 'no program'}"})
         elif t == "agent.start":
@@ -245,16 +246,17 @@ class Store:
             return
 
         def loop() -> None:
-            self.scan(announce=False)
-            while not self._stop.is_set():
+            announce = False   # until a scan completes: a run it didn't reach is still indexed silently
+            while True:
+                try:   # one bad log must not end the watcher: _changed() records its stat first, so it isn't retried
+                    self.scan(announce)
+                    announce = True
+                except Exception as e:
+                    print(f"tracekit why: watcher: {e}", file=sys.stderr)
                 self._wake.wait(interval)
                 self._wake.clear()
                 if self._stop.is_set():
                     return
-                try:
-                    self.scan()
-                except Exception as e:
-                    print(f"tracekit why: watcher: {e}", file=sys.stderr)
 
         self._watcher = threading.Thread(target=loop, daemon=True)
         self._watcher.start()

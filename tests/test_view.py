@@ -1219,6 +1219,36 @@ class WhyData(WhyServer):
         self.assertEqual({r["why"]["node"] for r in rows if r.get("ts_unread")}, {node})
         self.assertTrue(all(abs(r["ts"] - time.time()) < 5 for r in rows if r["why"]["node"] == node))
 
+    def test_a_why_log_event_without_its_hashes_is_on_the_tape(self):
+        """analyse() takes an event without hash or prev_hash (its chain check lists it); tape() raised KeyError."""
+        run = load_run(SYSTEM.run(seed=0, out_dir=self.store.root, run_id="t3").path)
+        del run.events[0]["hash"], run.events[1]["prev_hash"]
+        rows = {r["why"]["node"]: r for r in tape(run)}
+        self.assertEqual((rows["ev:" + run.events[0]["id"]]["hash"], rows["ev:" + run.events[1]["id"]]["prev"]),
+                         (None, None))
+
+    def test_a_why_log_the_tape_cannot_read_never_stops_the_watcher(self):
+        """The first scan ran outside the watcher's try: a run whose tape raised there ended the thread, and no later
+        run was published for the server's life."""
+        root, feed, real = os.path.join(self.tmp, "w"), WhyFeed(), tape
+        SYSTEM.run(seed=0, out_dir=root, run_id="bad")
+        store = Store(root, out=feed, tape=True, ingest=False)
+
+        def broken(run, start=0):
+            if run.run_id == "bad":
+                raise KeyError("hash")
+            return real(run, start)
+
+        with mock.patch("tracekit.why.server.tape", broken):
+            store.watch(0.05)
+            self.addCleanup(store.stop)
+            SYSTEM.run(seed=0, out_dir=root, run_id="later")
+            deadline = time.time() + 10
+            while time.time() < deadline and not any(r.get("session_id") == "later" for r in feed.records):
+                time.sleep(0.05)
+        self.assertTrue(store._watcher.is_alive())
+        self.assertTrue(any(r.get("session_id") == "later" for r in feed.records))
+
     def test_replay_without_the_program_says_what_to_run(self):
         store = Store(os.path.join(self.tmp, "srv2"))
         SYSTEM.run(seed=0, out_dir=store.root, run_id="r")
