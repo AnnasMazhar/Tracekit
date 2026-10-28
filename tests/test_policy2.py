@@ -528,7 +528,8 @@ class Prefilter(unittest.TestCase):
 class Speed(unittest.TestCase):
     """The fallback engine (`regex`) on 64 KiB built to make a pattern back off or rescan."""
     BUDGET_S = 0.15   # the slowest shipped pattern: ~20 ms on an M-series Mac, ~60 ms on CI runners; a rescan, 0.3 s+
-    FILLERS = (" -", " -a", " --de", ":", "0" * 39 + "x", "x\n", "--x", "/.", "\\", "a=", '"', "@")
+    FILLERS = (" -", " -a", " --de", ":", "0" * 39 + "x", "x\n", "--x", "/.", "\\", "a=", '"', "@", " ", "\t", "\\n",
+               '{"sql":"/*"},', '{"sql":"-- "},')
     # lean: these look for one thing after another with any text between, on a command line (TK-D002 a download, then a
     # pipe into a shell; TK-D004 a recursive option, then a root or home path; TK-D006, TK-D011 a read or upload, then
     # a secrets file, or a read piped into an upload; TK-D007 kill or launchctl, then tracekit; TK-C010 kubectl delete,
@@ -636,6 +637,44 @@ class Speed(unittest.TestCase):
                 self.assertNotIn("TK-A039", d["rule_ids"], d)
                 self.assertNotIn("TK-A041", d["rule_ids"], d)
                 self.assertLess(took, self.BUDGET_S, d)
+
+    def test_long_whitespace_in_a_database_statement_decides_the_same_on_both_engines(self):
+        """TK-A039/TK-A041 (1.5.0 review, F1): 64 KiB of spaces, tabs or escaped newlines after `psql -c`, `mysql -e`,
+        `clickhouse-client -q` or `mongosh --eval`, after `DELETE FROM x`, or in an MCP tool's sql or query argument
+        spent the fallback engine's 1 s and denied as nondeterministic where RE2 allowed or flagged: two repeats read
+        the same run, and the fallback backs a greedy run of whitespace off quadratically. Each decides as RE2 does,
+        in milliseconds."""
+        pol = pc.build(os.path.join(PACKS, "coding.yaml"))[0]
+        engines = [Engine(pol, b) for b in (("re2", "regex") if HAVE_RE2 else ("regex",))]
+        n, bs = MAX_SUBJECT - 64, chr(92)
+        calls = [("Bash", {"command": pre + (unit * n)[:n] + end})
+                 for pre, end in (('psql -c "', '"'), ('mysql -e "', '"'), ("clickhouse-client -q '", "'"),
+                                  ("mongosh --eval '", "'"), ("mongosh --eval 'db.x.deleteMany(", "'"),
+                                  ('psql -c "DELETE FROM ', '"'), ('psql -c "DELETE FROM x ', '"'))
+                 for unit in (" ", "\t", bs + "n", bs + "n ")]
+        calls += [("mcp__db__run", {key: pre + (unit * n)[:n]}) for key in ("sql", "query")
+                  for pre in ("", "DROP ", "DELETE FROM x a") for unit in (" ", "\t", "\n")]
+        # a long short-option cluster after the client (review of 1.5.0's fix), and a comment opened in each of many
+        # SQL strings, which read on past the string's closing quote
+        calls += [("Bash", {"command": "mysql -e" + "x" * n}), ("Bash", {"command": "psql -" + "c" * n}),
+                  ("Bash", {"command": "mysql -" + "x" * n}), ("Bash", {"command": "psql -" + "x" * n + "c"}),
+                  ("Bash", {"command": "psql " + "-xxxxxxxxxx " * (n // 12)}),
+                  ("Bash", {"command": "psql -" + "1" * n + "c"}), ("Bash", {"command": "mysql -" + "c" * n}),
+                  ("Bash", {"command": "mariadb -" + "N" * n + "x"}),
+                  ("Bash", {"command": "psql -c 'SELECT 1' -c" + "x" * (n - 24)})]
+        calls += [("mcp__db__run", {"rows": [{key: text}] * (n // 16)}) for key in ("sql", "query")
+                  for text in ("/*", "-- ", "/* x")]
+        for tool, args in calls:
+            with self.subTest(tool=tool, start=str(args)[:40]):
+                out = []
+                for e in engines:
+                    start = time.perf_counter()
+                    d = e.decide(tool, args)
+                    out.append((d["verdict"], d["rule_ids"], d.get("nondeterministic")))
+                    if e.engine.startswith("regex"):
+                        self.assertLess(time.perf_counter() - start, 0.5 * SLOWER, d)
+                self.assertIsNone(out[-1][2], out)
+                self.assertEqual(len(set(map(repr, out))), 1, out)
 
     def test_an_indented_select_in_a_sqlite3_argument_decides_fast_on_the_fallback_engine(self):
         """TK-A039's sqlite3 branch took the space before the SQL with `\\s+`, so ~60 KiB of SELECT indented 32 spaces
@@ -1218,6 +1257,24 @@ class Classes(unittest.TestCase):
                     "https://user@example.com:8443/a?b#c", "//example.com/x", "https://\uff11\uff12\uff17.example.com/"):
             with self.subTest(url=url):
                 self.assertFalse(classes.url_info(url)["internal"])
+
+    def test_invisible_characters_in_a_host_are_dropped_as_a_url_parser_drops_them(self):
+        """A browser's or Node's URL parser drops a soft hyphen, a zero-width space or joiner, a word joiner, a
+        byte-order mark or a tag character in a host (also percent-encoded); the signer kept them, so
+        http://127.0.0<soft hyphen>.1/ was no address and only flagged. They are dropped before the host is read."""
+        for ch in ("­", "​", "‍", "⁠", "﻿", "%C2%AD", "%E2%80%8B", "\U000e0041", "᠎"):
+            for url in ("http://127.0.0" + ch + ".1/", "http://127.0.0.1" + ch + "/", "http://169.254.169.254" + ch + "/"):
+                with self.subTest(url=url):
+                    self.assertTrue(classes.url_info(url)["internal"])
+                    self.assertIn(classes.url_target(url), ("http://127.0.0.1/", "http://169.254.169.254/"))
+        self.assertEqual(classes.url_info("https://exam­ple.com/"), {"scheme": "https", "host": "example.com",
+                                                                          "internal": False})
+        self.assertEqual(classes.url_info("http://local​host:8080/")["host"], "localhost")
+        # a host of nothing but invisible code points names no host: it is no address, as an empty one would be
+        for url in ("http://ㅤ/", "http://%C2%AD:80/", "http://​./", "http://ﾠ/x", "http://­​/"):
+            with self.subTest(url=url):
+                self.assertEqual(classes.url_info(url)["internal"], True)
+                self.assertIsNone(classes.url_info(url)["host"])
 
     def test_reading_a_long_url_is_linear(self):
         """A URL near the 1 MB frame limit took seconds per reading, and a decide reads it once per target rule too:
