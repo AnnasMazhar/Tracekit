@@ -621,7 +621,8 @@ def v2_checks(config, profile="production", agent=None, settings=None, signer=No
             # what Claude Code skips: every hook (disableAllHooks, a true value in JavaScript), the tools a matcher
             # other than "*", "" or none leaves out, and on POSIX a PreToolUse hook that can't start and isn't wrapped
             # to block the call
-            off = [p for p in layers if _setting(p, "disableAllHooks") not in (None, False, 0, "")] \
+            off = [p for p in dict.fromkeys([*layers, settings])   # the hooks' own file too (init's record of it)
+                   if _setting(p, "disableAllHooks") not in (None, False, 0, "")] \
                 if any(hooks.values()) or plugin else []
             narrowed = {ev: hs[0]["matcher"] for ev, hs in hooks.items()
                         if hs and all(h["matcher"] not in (None, "", "*") for h in hs)}

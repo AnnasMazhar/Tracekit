@@ -358,6 +358,18 @@ class ClaudeHooksDecideEveryCall(unittest.TestCase):
                    if r["id"] == "D-HOOKS-EVENT")
         self.assertEqual(got["status"], "warn")
 
+    def test_dev_mode_reads_disable_all_hooks_in_the_file_init_recorded(self):
+        """The dev layers left out the hooks' own file (init's record of another CLAUDE_CONFIG_DIR), so a
+        disableAllHooks there passed."""
+        self.row(lambda s: s.update(disableAllHooks=True))
+        with mock.patch.object(doctor.client, "system_config", return_value=None), \
+                mock.patch.object(doctor, "_dev_settings", return_value=self.settings), \
+                mock.patch.object(install, "user_settings", return_value=os.path.join(self.d, "user.json")), \
+                mock.patch("os.getcwd", return_value=self.d):
+            got = next(r for r in doctor.collect() if r["id"] == "D-HOOKS-EVENT")
+        self.assertEqual(got["status"], "warn")
+        self.assertIn(f"disableAllHooks is set in {self.settings}", got["detail"])
+
     @unittest.skipIf(os.name == "nt", "the fail-closed wrapper is POSIX shell")
     def test_a_pre_tool_command_not_wrapped_to_block_warns(self):
         stop_like = install._hook_command(install.V2_HOOK, args=("PreToolUse",), pre=False)   # can't run: exit 1
