@@ -55,6 +55,7 @@ import urllib.parse
 from . import __version__, hook as H
 from .core import canon
 from .locking import lock_file, unlock_file
+from .policy2.classes import PATH_KEYS, first
 
 HARNESSES = ("codex", "cursor", "gemini", "opencode", "goose", "qwen", "droid", "antigravity")
 AGENT_NAMES = {"codex": "codex", "cursor": "cursor", "gemini": "gemini-cli", "opencode": "opencode", "goose": "goose",
@@ -167,13 +168,17 @@ def tool(harness, name, ti):
         return CURSOR_TOOLS.get(name, name), ti
     if harness in ("gemini", "qwen"):
         mapped = (QWEN_TOOLS if harness == "qwen" else GEMINI_TOOLS).get(name, name)
-        # every path the tool may read is decided, so a key one release ignores never replaces the one another reads
-        lists = [ti.get(k) for k in (("paths", "include") if name == "read_many_files" else ("paths",))]
-        files = list(dict.fromkeys(f for f in [ti.get(k) for k in GEMINI_PATH_ARGS] + [
-            f for v in lists if isinstance(v, list) for f in v] if isinstance(f, str)))
-        if files and mapped != "Bash":   # a shell command's dir_path is where it runs, not a file it reads
-            ti.setdefault("file_path", files[0])
-            if files != [ti["file_path"]]:
+        if mapped != "Bash":   # a shell command's dir_path is where it runs, not a file it reads
+            lists = [ti.get(k) for k in (("paths", "include") if name == "read_many_files" else ("paths",))]
+            files = list(dict.fromkeys(f for f in [ti.get(k) for k in GEMINI_PATH_ARGS] + [
+                f for v in lists if isinstance(v, list) for f in v] if isinstance(f, str)))
+            for k in ("absolute_path", "notebook_path", "dir_path"):
+                if k in ti and "file_path" not in ti:
+                    ti["file_path"] = ti[k]
+            # every path the tool may read is decided (the policy reads the first path key and `paths`), so a key one
+            # release ignores never replaces the one another reads
+            decided = [first(ti, *PATH_KEYS), *(ti["paths"] if isinstance(ti.get("paths"), list) else ())]
+            if any(f not in decided for f in files):
                 ti["paths"] = files
         if name == "web_fetch":   # Gemini CLI fetches every URL its prompt names, Qwen Code its `url`: each is decided
             # lean: a URL Qwen Code's prompt only names is decided as if fetched; read the prompt for Gemini CLI alone

@@ -511,8 +511,7 @@ class QwenTools(unittest.TestCase):
             with self.subTest(tool=name):
                 tool, args = agent_hooks.tool("qwen", name, ti)
                 self.assertEqual(tool, want)
-                self.assertEqual(args.get("file_path"), ti.get("file_path") or ti.get("absolute_path") or ti.get("notebook_path")
-                                 or ti.get("path"))
+                self.assertEqual(args.get("file_path"), ti.get("file_path") or ti.get("absolute_path") or ti.get("notebook_path"))
         self.assertEqual(agent_hooks.tool("qwen", "web_fetch", {"prompt": "see https://x.example/a"})[1]["url"], "https://x.example/a")
         # Gemini CLI has no edit or grep_search tool: its names are not changed
         self.assertEqual(agent_hooks.tool("gemini", "edit", {})[0], "edit")
