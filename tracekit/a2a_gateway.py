@@ -76,6 +76,16 @@ TASKS_PER_CALLER = 1024
 CALLERS_WITH_TASKS = 1024
 MAX_TASK_ID = 1024
 MAX_REFERENCE_TASK_IDS = 64
+# the fields of message/send's, message/stream's and tasks/get's params by their names folded as a receiver may read
+# them: a2a-python reads snake_case names too, and a JSON decoder may match names in any case (Go's encoding/json
+# does); metadata and a data part's data are free-form. lean: A2A 0.3's fields, all the gateway and the policy read;
+# add a later version's once they read one of its fields
+FIELDS = {f.casefold(): f for f in (
+    "message", "configuration", "metadata", "acceptedOutputModes", "historyLength", "pushNotificationConfig",
+    "blocking", "id", "url", "token", "authentication", "schemes", "credentials", "role", "parts", "extensions",
+    "referenceTaskIds", "messageId", "taskId", "contextId", "kind", "text", "file", "bytes", "uri", "mimeType", "name",
+    "data")}
+FREE_FORM = {"metadata", "data"}
 
 
 class _Tasks:
@@ -107,33 +117,48 @@ class _Tasks:
                 self.callers.popitem(last=False)
 
 
-def _fields(obj, name):
-    """The values dict `obj` holds for field `name` in every spelling an A2A server may read it by: a2a-python reads
-    the snake_case name too, and a JSON decoder may match names in any case (Go's encoding/json does)."""
-    fold = name.casefold()
-    return [v for k, v in obj.items() if k.replace("_", "").casefold() == fold] if isinstance(obj, dict) else []
+def _misspelled(params):
+    """The A2A field `params` names, at any depth, in a spelling other than A2A's, if any: a receiver may read it as
+    that field (FIELDS), where the gateway and the policy (policy2/classes.a2a_fields) read only A2A's spelling."""
+    stack = [params]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, list):
+            stack += value
+        elif isinstance(value, dict):
+            for key, v in value.items():
+                field = FIELDS.get(key.replace("_", "").casefold())
+                if field not in (None, key):
+                    return field
+                if field is not None and field not in FREE_FORM:
+                    stack.append(v)
+    return None
 
 
 def _task_refs(method, params):
     """The existing tasks and contexts a request reads or continues, if it names them."""
     if method == "tasks/get":
-        refs = _fields(params, "id")
-        if not all(map(_task_id, refs)):
+        if "id" not in params:
+            return ()
+        if not _task_id(params["id"]):
             raise ValueError("tasks/get id is a non-empty string of at most %d characters" % MAX_TASK_ID)
-        return tuple(refs)
+        return (params["id"],)
+    message = params.get("message")
+    if not isinstance(message, dict):
+        return ()
     refs = []
-    for message in _fields(params, "message"):
-        for field in ("taskId", "contextId"):
-            for value in _fields(message, field):
-                if not _task_id(value):
-                    raise ValueError(f"message {field} is a non-empty string of at most {MAX_TASK_ID} characters")
-                refs.append(value)
-        for values in _fields(message, "referenceTaskIds"):
-            if not isinstance(values, list) or len(values) > MAX_REFERENCE_TASK_IDS or \
-                    any(not _task_id(value) for value in values) or len(set(values)) != len(values):
-                raise ValueError("message referenceTaskIds is a list of at most %d unique non-empty strings of at "
-                                 "most %d characters" % (MAX_REFERENCE_TASK_IDS, MAX_TASK_ID))
-            refs += values
+    for field in ("taskId", "contextId"):
+        if field in message:
+            if not _task_id(message[field]):
+                raise ValueError(f"message {field} is a non-empty string of at most {MAX_TASK_ID} characters")
+            refs.append(message[field])
+    if "referenceTaskIds" in message:
+        values = message["referenceTaskIds"]
+        if not isinstance(values, list) or len(values) > MAX_REFERENCE_TASK_IDS or \
+                any(not _task_id(value) for value in values) or len(set(values)) != len(values):
+            raise ValueError("message referenceTaskIds is a list of at most %d unique non-empty strings of at most %d "
+                             "characters" % (MAX_REFERENCE_TASK_IDS, MAX_TASK_ID))
+        refs += values
     return tuple(refs)
 
 
@@ -182,8 +207,12 @@ class _A2aGateway(_Handler):
                                  f"{', '.join(sorted(METHODS))}")
         if not isinstance(params, dict):
             raise _Error(-32602, "params is an object")
-        if any(push is not None for conf in _fields(params, "configuration")
-               for push in _fields(conf, "pushNotificationConfig")):
+        misspelled = _misspelled(params)
+        if misspelled:
+            raise _Error(-32602, f"params names {misspelled} in a spelling A2A does not use (another case or "
+                                 f"snake_case); send it as {misspelled}")
+        if isinstance(params.get("configuration"), dict) and \
+                params["configuration"].get("pushNotificationConfig") is not None:
             raise _Error(-32602, "the gateway does not relay push notification configs; read the task's state with "
                                  "message/stream or tasks/get")
         try:

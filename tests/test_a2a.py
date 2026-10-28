@@ -251,20 +251,21 @@ class Gateway(unittest.TestCase):
     def test_task_ids_belong_to_the_caller_that_created_them(self):
         self.send("researcher")
         other_run = self.register(CallerIdentity("token", "other", True))
-        # each in every spelling a receiver may read: a2a-python's snake_case names, and any case (Go's encoding/json)
-        refs = [{"taskId": "task-1"}, {"contextId": "task-1"}, {"referenceTaskIds": ["task-1"]},
-                {"task_id": "task-1"}, {"context_id": "task-1"}, {"reference_task_ids": ["task-1"]},
-                {"TaskID": "task-1"}]
-        cases = [("tasks/get", {"id": "task-1"}), ("tasks/get", {"ID": "task-1"}),
-                 ("message/send", {"Message": dict(TEXT, taskId="task-1")})] + \
-                [(method, {"message": dict(TEXT, **ref)}) for method in ("message/send", "message/stream")
-                 for ref in refs]
-        for method, params in cases:
+        refs = {-32001: [{"taskId": "task-1"}, {"contextId": "task-1"}, {"referenceTaskIds": ["task-1"]}],
+                # other spellings a receiver may read too (a2a-python's snake_case, any case in Go's encoding/json)
+                -32602: [{"task_id": "task-1"}, {"context_id": "task-1"}, {"reference_task_ids": ["task-1"]},
+                         {"TaskID": "task-1"}]}
+        cases = [("tasks/get", {"id": "task-1"}, -32001), ("tasks/get", {"ID": "task-1"}, -32602),
+                 ("message/send", {"Message": dict(TEXT, taskId="task-1")}, -32602)] + \
+                [(method, {"message": dict(TEXT, **ref)}, code) for method in ("message/send", "message/stream")
+                 for code in refs for ref in refs[code]]
+        for method, params, code in cases:
             with self.subTest(method=method, params=params):
                 with self.as_other():
                     _, _, body = self.post("researcher", method, params, run=other_run)
-                self.assertEqual(json.loads(body)["error"]["code"], -32001)
+                self.assertEqual(json.loads(body)["error"]["code"], code)
         self.assertEqual(len(self.a2a.seen), 1)
+        self.assertFalse(self.srv.a2a["tasks"].owns("token:other", "task-1"))
         self.assertEqual([e for e in self.events(other_run) if e["type"] == "policy.decision"], [])
 
     def test_malformed_task_references_are_refused_before_a_decision_or_send(self):
@@ -299,6 +300,22 @@ class Gateway(unittest.TestCase):
                     self.assertEqual(json.loads(body)["error"]["code"], -32602)
         self.assertEqual(self.a2a.seen, [])
         self.assertEqual([e for e in self.events() if e["type"] == "policy.decision"], [])
+
+    def test_a_rule_on_part_kinds_or_hosts_is_not_hidden_by_another_spelling(self):
+        uri = FILE["parts"][0]["file"]["uri"]
+        for message in ({"Message": FILE}, {"message": dict(TEXT, Parts=FILE["parts"])},
+                        {"message": dict(FILE, parts=[{"Kind": "file", "File": {"URI": uri}}])},
+                        {"message": dict(FILE, parts=[{"kind": "file", "file": {"URI": uri}}])},
+                        {"message": dict(FILE, parts=[{"kind": "file", "file": {"uri": uri}, "mime_type": "x"}])}):
+            with self.subTest(message=message):
+                _, _, body = self.post("researcher", params=message)
+                self.assertEqual(json.loads(body)["error"]["code"], -32602)
+        self.assertEqual(self.a2a.seen, [])
+        # metadata and a data part's data are free-form: any keys pass
+        free = dict(TEXT, metadata={"Kind": "file", "task_id": "x"},
+                    parts=[{"kind": "data", "data": {"Message": {"URI": uri}}}])
+        self.assertIn("result", self.send("researcher", free))
+        self.assertEqual([e["data"]["decision"] for e in self.events() if e["type"] == "policy.decision"], ["allow"])
 
     def test_a_conversation_goes_on_in_the_context_the_receiver_named(self):
         other_run = self.register(CallerIdentity("token", "other", True))
