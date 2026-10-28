@@ -293,7 +293,7 @@ def _hook_command(module="tracekit.hook", func="_entry", args=(), python=None, p
     if module in V2_HOOKS or json_deny:
         return _blocking(cmd, pre=pre, json_deny=json_deny)
     return _blocking(cmd, "[ \"$TRACEKIT_FAIL_CLOSED\" = 1 ] || { echo 'tracekit: the hook could not run; call NOT "
-                          "recorded (fail-open: set TRACEKIT_FAIL_CLOSED=1 to block it)' >&2; exit 1; }; ") if pre else cmd
+                          "recorded (set TRACEKIT_FAIL_CLOSED=1 to block it)' >&2; exit 1; }; ") if pre else cmd
 
 
 def _dev_hook_argv(module, func, args):

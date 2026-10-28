@@ -146,6 +146,7 @@ class FailMode(unittest.TestCase):
                     if run in ("false", gone):
                         self.assertIn("call blocked (fail-closed)" if want == 2 else "set TRACEKIT_FAIL_CLOSED=1",
                                       p.stderr)
+                        self.assertNotIn("fail-open", p.stderr)   # goose and Cursor may still block it
 
     def test_wiring_error_blocks_when_fail_closed(self):
         with mock.patch.object(client, "system_fail_closed", return_value=True), mock.patch("sys.stderr", io.StringIO()):
