@@ -396,9 +396,10 @@ def helper_result(unit, fix):
 
 
 def _hooks(settings):
-    """{tool event: [v2 hook entries]} of a Claude Code settings file."""
+    """{tool event: [v2 hook entries, each with its group's "matcher"]} of a Claude Code settings file."""
     hooks = (_json(settings) or {}).get("hooks") or {}
-    return {ev: [h for g in hooks.get(ev) or () if isinstance(g, dict) and install._hook_version(g) == "v2"
+    return {ev: [{**h, "matcher": g.get("matcher")} for g in hooks.get(ev) or ()
+                 if isinstance(g, dict) and install._hook_version(g) == "v2"
                  for h in g.get("hooks") or () if isinstance(h, dict)] for ev in install.TOOL_EVENTS}
 
 
@@ -612,14 +613,33 @@ def v2_checks(config, profile="production", agent=None, settings=None, signer=No
             add("D-HOOKS-PRESENT", not missing, f"no v2 hook for {', '.join(missing)} in {settings}" if missing else
                 f"v2 hooks in {settings}", hook_fix, bad=sev)
         if hooks is not None:
+            layers = sandbox_settings or dict.fromkeys((os.path.join(agent.pw_dir, ".claude", "settings.json") if agent
+                                                        else install.user_settings(), settings))
             cmds = [(ev, h.get("command") or "") for ev, hs in hooks.items() for h in hs]
             unnamed = sorted({ev for ev, c in cmds if not re.search(rf"\b{ev}\b", c)})
             blocking = sorted({ev for ev, c in cmds if ev != "PreToolUse" and FAIL_CLOSED in c})
-            add("D-HOOKS-EVENT", not unnamed and not blocking, f"the {', '.join(unnamed)} hook command(s) do not name "
+            # what Claude Code skips: every hook (disableAllHooks, a true value in JavaScript), the tools a matcher
+            # other than "*", "" or none leaves out, and on POSIX a PreToolUse hook that can't start and isn't wrapped
+            # to block the call
+            off = [p for p in layers if _setting(p, "disableAllHooks") not in (None, False, 0, "")] \
+                if any(hooks.values()) or plugin else []
+            narrowed = {ev: hs[0]["matcher"] for ev, hs in hooks.items()
+                        if hs and all(h["matcher"] not in (None, "", "*") for h in hs)}
+            unwrapped = os.name != "nt" and hooks["PreToolUse"] and not any(
+                FAIL_CLOSED in (h.get("command") or "") for h in hooks["PreToolUse"])
+            add("D-HOOKS-EVENT", not (off or narrowed or unnamed or blocking or unwrapped),
+                f"disableAllHooks is set in {', '.join(off)}: Claude Code runs none of its hooks, so every call runs "
+                "undecided and unrecorded" if off else f"the matcher of the "
+                f"{', '.join(f'{ev} hook ({json.dumps(m)[:64]})' for ev, m in narrowed.items())} leaves tools out: "
+                "Claude Code runs their calls undecided or unrecorded (\"*\" matches every tool)" if narrowed else
+                f"the {', '.join(unnamed)} hook command(s) do not name "
                 "their event (installed before 1.2): a PreToolUse payload the hook cannot read lets the call through "
                 "unrecorded" if unnamed else f"the {', '.join(blocking)} hook command(s) block the event when the hook "
                 "can't run (installed before 1.3, which did so for each prompt and Stop too)" if blocking else
-                "each hook command names its event", hook_fix, bad=WARN)
+                "the PreToolUse hook command isn't wrapped to block the call when the hook can't run: one that can't "
+                "start exits 1, and Claude Code runs the call undecided and unrecorded" if unwrapped else
+                "each hook command names its event", f'remove "disableAllHooks" from {", ".join(off)}' if off
+                else hook_fix, bad=sev if off else WARN)
             if prod and opt and cmds:
                 python = os.path.join(opt, "bin", "python")
                 stray = [c for ev, c in cmds if c not in (install._hook_command(install.V2_HOOK, args=a, python=python,
@@ -633,9 +653,8 @@ def v2_checks(config, profile="production", agent=None, settings=None, signer=No
                     f"{APPROVAL_WAIT_S} s", f"set the PreToolUse hook timeout to {install.HOOK_TIMEOUT['PreToolUse']}")
             if any(hooks.values()) or plugin:   # without Claude Code's hooks none of its reasoning is recorded
                 vault = isinstance(cfg.get("content"), dict) and cfg["content"].get("retain") is True
-                user = os.path.join(agent.pw_dir, ".claude", "settings.json") if agent else install.user_settings()
                 value, where = None, None   # Claude Code's precedence: the last file that sets it wins
-                for p in sandbox_settings or dict.fromkeys((user, settings)):
+                for p in layers:
                     v = _setting(p, install.THINKING)
                     if v is not None:
                         value, where = v, p
