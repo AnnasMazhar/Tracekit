@@ -34,11 +34,16 @@ argument edges. A T2 executor or gateway result is required for `wrote` or `reac
 
 ## 2. Read what can't be trusted first
 
-Read the "Read first" section of `GRAPH_REPORT.md`, or `sources` in graph.json: a source with `verify.ok: false`
-makes every edge from it `UNVERIFIED`. Report failed sources, gaps (`gap` nodes) and runs with `unread_args`
-before anything else. If the answer matters, check the files still match their sources:
+graph.json is not signed: anyone who can write the directory, an agent included, can write it, sources and grades
+too. Before relying on any answer, check the files still match their sources:
 `tracekit graph verify tracekit-graph RUN.tkb ... --trust trust.json` (exit 0: unchanged). Omit `RUN.tkb ...` only
-when the recorded bundle names are available in the current directory.
+when the recorded bundle names are available in the current directory. If it exits non-zero, or you have no bundles or
+trust config to run it with, say the answers are unverified, and why, before giving any. `graph query` does not verify;
+its first line (stderr with `--json`) says so.
+
+Then read the "Read first" section of `GRAPH_REPORT.md`, or `sources` in graph.json: a source with `verify.ok: false`
+makes every edge from it `UNVERIFIED`. Report failed sources, gaps (`gap` nodes) and runs with `unread_args`
+before anything else.
 
 ## 3. Query; don't load the whole file
 

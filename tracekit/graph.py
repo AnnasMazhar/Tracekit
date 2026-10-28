@@ -1197,9 +1197,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             text += [f"code in these files (Graphify): {n['label']} ("
                      + " ".join(filter(None, (n["source_file"], n.get("source_location")))) + ")" for n in res["code"]]
     except ValueError as e:
-        print(f"tracekit graph: {e}", file=sys.stderr)
+        print(f"tracekit graph: {v2._CONTROL.sub('', str(e))}", file=sys.stderr)
         return 2
-    print(json.dumps(res, sort_keys=True, indent=1, ensure_ascii=False) if a.json else "\n".join(text))
+    # graph.json is unsigned: whoever can write DIR can write the answers
+    unverified = (f"{os.path.join(a.dir, GRAPH)} is not verified here: check it against its bundles with "
+                  f"`tracekit graph verify {a.dir} --trust trust.json` before relying on these answers")
+    if a.json:
+        print(v2._CONTROL.sub("", unverified), file=sys.stderr)
+    # labels are agent-chosen (a tool name is stored as given): no control character may redraw a line or its grade
+    print(json.dumps(res, sort_keys=True, indent=1, ensure_ascii=False) if a.json
+          else "\n".join(v2._CONTROL.sub("", line) for line in [unverified] + text))
     return 0 if res.get("matched", res.get("found", True)) else 1
 
 

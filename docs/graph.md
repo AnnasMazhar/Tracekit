@@ -125,6 +125,12 @@ Node filters return `{matched, code, runs, map}`. `--blast` returns `{from, reac
 A node filter with no match, or a path that is not found, exits 1. A bad graph or an unknown or ambiguous node exits
 2. A blast with no downstream node is still a successful query.
 
+`graph.json` is not signed, and `query` answers from it as it finds it, so anyone who can write `DIR` can write the
+answers. The first line of the text output (stderr with `--json`) says so and gives the command that checks it:
+`tracekit graph verify DIR --trust trust.json` ([Rebuild and verify](#rebuild-and-verify)). The text output drops
+control and bidirectional format characters from labels, as `tracekit verify` does, so an agent-chosen name such as
+a tool's can't redraw a line or its grade on the terminal.
+
 ## Report
 
 `GRAPH_REPORT.md` starts with failed sources, unreadable sources or runs, gaps, and unread call arguments. Read that

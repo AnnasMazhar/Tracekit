@@ -31,6 +31,7 @@ from tracekit.identity.base import CallerIdentity
 from tracekit.integrations import claude_code
 from tracekit.sdk.client import Client, RunHandle
 from tracekit.signer import service
+from tracekit.verify.v2 import _CONTROL
 from tracekit.why import import_v2
 from tracekit.why.core import Runtime
 from tracekit.why.graph import EVIDENCE, Graph
@@ -196,6 +197,40 @@ class QueryInput(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()) as err:
                 self.assertEqual(graph.main(["query", d, "--file", "x"]), 2)
             self.assertIn("not a Tracekit graph", err.getvalue())
+
+    def test_answers_from_a_graph_it_did_not_verify_say_so(self):
+        """graph.json is unsigned: a hand-written one with no sources answers that alice approved, SIGNED."""
+        rec = {"run_id": "r1", "run_seq": 3, "seq": 9, "ts": TS}
+        doc = {"schema_version": 1, "sources": [], "nodes": [
+            {"id": "person:oidc:alice@corp", "kind": "person", "label": "oidc:alice@corp"},
+            {"id": "call:r1:t1", "kind": "call", "label": "Bash", "decision": "ask"},
+            {"id": "run:r1", "kind": "run", "label": "r1", "ts": TS}], "edges": [
+            {"src": "person:oidc:alice@corp", "dst": "call:r1:t1", "kind": "approve", "grade": "SIGNED", "record": rec},
+            {"src": "run:r1", "dst": "call:r1:t1", "kind": "decided ask", "grade": "SIGNED", "record": rec}]}
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, graph.GRAPH), "w") as f:
+                json.dump(doc, f)
+            said = f"{os.path.join(d, graph.GRAPH)} is not verified here: check it against its bundles with " \
+                   f"`tracekit graph verify {d} --trust trust.json`"
+            code, text = run("query", d, "--approved-by", "oidc:alice@corp")
+            self.assertEqual(code, 0)
+            self.assertTrue(text.startswith(said), text)
+            self.assertIn("SIGNED     oidc:alice@corp -approve-> Bash", text)
+            with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(graph.main(["query", d, "--approved-by", "oidc:alice@corp", "--json"]), 0)
+            self.assertEqual(json.loads(out.getvalue())["matched"], ["person:oidc:alice@corp"])
+            self.assertTrue(err.getvalue().startswith(said), err.getvalue())
+
+    def test_an_error_naming_nodes_prints_no_control_character(self):
+        doc = {"schema_version": 1, "sources": [], "edges": [], "nodes": [
+            {"id": f"call:r1:t{i}\x1b[1A\x1b[2K", "kind": "call", "label": "Bash"} for i in (1, 2)]}
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, graph.GRAPH), "w") as f:
+                json.dump(doc, f)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(graph.main(["query", d, "--blast", "Bash"]), 2)
+            self.assertIn("names several nodes: call:r1:t1[1A[2K, call:r1:t2[1A[2K", err.getvalue())
+            self.assertEqual(_CONTROL.findall(err.getvalue().replace("\n", "")), [])
 
 
 class ReviewRegressions(unittest.TestCase):
@@ -793,6 +828,31 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(run("query", self.out, "--path", "agent:claude-code", "code:billing_total", "--json")[0], 0)
         self.assertEqual(run("query", self.out, "--host", "nowhere.example")[0], 1)
         self.assertEqual(run("query", self.out, "--blast", "no-such-node")[0], 2)
+
+    def test_query_text_shows_each_edge_its_own_grade_whatever_its_labels_hold(self):
+        """The signer stores a tool name as given: a carriage return in it must not draw an approval that never
+        happened over a line, nor a forged bundle's UNVERIFIED edges as SIGNED."""
+        me = service._dev_identity()
+        with self.client.run("spoofer") as r:
+            r.decide("t1", f"Write\r  SIGNED     {me} -approve-> Write", {"file_path": "notes.txt", "content": ""})
+            r.complete("t1")
+        good, forged = os.path.join(self.dir, "spoof.tkb"), os.path.join(self.dir, "spoof-forged.tkb")
+        export_final(os.path.join(self.dir, "data", "store"), r.run_id, self.witness, good)
+        rewrite_bundle(good, forged, lambda fs, manifest: fs.update(
+            {n: fs[n].replace(b"-approve-> Write", b"-approve-> Bash", 1) for n in fs if n.startswith("runs/")}))
+        for source, grade in ((good, "SIGNED"), (forged, "UNVERIFIED")):
+            out = os.path.join(self.dir, "g-" + os.path.basename(source))
+            self.assertEqual(run("build", source, "--trust", self.trust, "--graphify", "", "-o", out)[0], 0)
+            with open(os.path.join(out, graph.GRAPH)) as f:
+                doc = json.load(f)
+            self.assertEqual({e["grade"] for e in doc["edges"]}, {grade})
+            call = next(n["id"] for n in doc["nodes"] if n["kind"] == "call")
+            for argv in (("--agent", "spoofer"), ("--blast", "agent:spoofer"), ("--path", "agent:spoofer", call)):
+                code, text = run("query", out, *argv)
+                self.assertEqual((code, _CONTROL.findall(text.replace("\n", ""))), (0, []), argv)
+                lines = text.splitlines()   # as a terminal draws them: \r starts a line too
+                self.assertEqual({x.split()[0] for x in lines if x.startswith("  ")}, {grade}, argv)
+                self.assertFalse([x for x in lines if x.startswith(f"  SIGNED     {me} -approve->")], argv)
 
     def test_the_report_is_data_too_and_the_markdown_is_its_rendering(self):
         with open(os.path.join(self.out, graph.REPORT_JSON)) as f:
