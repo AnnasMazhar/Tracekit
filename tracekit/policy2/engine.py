@@ -440,13 +440,12 @@ def _effects(parsed):
     print > "file", zip -m's sources, and one of those that git, docker, podman, kubectl or parallel runs from its words
     (git rm). When a command writes files the line names only at run time or inside code it runs (_opaque), or the
     parser can't read what one runs (its `opaque`: `| sh`, `fish -c`, a name an expansion builds) and a writer's name
-    or `>` is in its normalised lines or its herestring or heredoc text, every word on the line and each herestring and
-    heredoc text is one it may write, as MAY_WRITE:word (only TK-D008 reads those); for one the parser can't read, each
-    normalised line too (a name an expansion builds may hold the path)."""
+    reaches it (_reaches_unread), every word on the line and each herestring and heredoc text is one it may write, as
+    MAY_WRITE:word (only TK-D008 reads those); for one the parser can't read, each normalised line too (a name an
+    expansion builds may hold the path)."""
     tags = ["WRITE_TARGET:" + _text(ref) for ref in parsed[3]] + _command_effects(parsed[0])
     unread = any(c["opaque"] for c in parsed[0])
-    if any(_opaque(c) for c in parsed[0]) or unread and any(
-            _WRITE_WORD.search(t.lower()) for t in parsed[1] + [s for c in parsed[0] for s in c["stdin"]]):
+    if any(_opaque(c) for c in parsed[0]) or unread and _reaches_unread(parsed[0]):
         # lean: a read on the same line as such a writer counts as a write (as TK-D008 read the whole line before
         # #421); follow the names into the writer if that holds real reads
         tags += ["MAY_WRITE:" + w for c in parsed[0] for w in c["argv"][1:] + c["stdin"]]
@@ -454,8 +453,20 @@ def _effects(parsed):
     return list(dict.fromkeys(tags + [k + ":" + path.casefold() for k, _, path in (t.partition(":") for t in tags)]))
 
 
+_WRITER = re.compile(r"\b(?:rm|unlink|truncate|shred|mv|tee|dd|ln|perl)\b")
 _WRITE_WORD = re.compile(r"\b(?:rm|unlink|truncate|shred|mv|tee|dd|ln|sed|perl|find)\b|>")
 _APPLESCRIPT_WRITE = re.compile(r"(?i)do ?shell ?script|\bdelete\b")   # JXA's doShellScript too
+
+
+def _reaches_unread(commands):
+    """Whether a writer's name (or `>`, in a word) reaches a command the parser can't read: in its words, its name as
+    written (`rm${IFS}-rf${IFS}…`), its herestring or heredoc text, or an earlier stage of its pipeline's (`echo 'rm
+    …' | sh`). A redirection elsewhere on the line (`$PAGER x 2>/dev/null`), another command (`find x | xargs -I{} sh
+    -c 'wc -l {}'`) and a heredoc's program text (`$PY - <<EOF` with a `>` in it) don't."""
+    last = {c["pipeline"]: i for i, c in enumerate(commands) if c["opaque"]}
+    fed = [c for i, c in enumerate(commands) if i <= last.get(c["pipeline"], -1)]
+    return any(_WRITE_WORD.search(w.lower()) for c in fed for w in [c["word"]] * c["opaque"] + c["argv"][1:]) or \
+        any(_WRITER.search(s.lower()) for c in fed for s in c["stdin"])
 
 
 def _opaque(command):
@@ -473,16 +484,28 @@ def _opaque(command):
     if exe in ("xargs", "parallel", "docker", "podman", "kubectl", "ssh") or \
             re.fullmatch(r"perl|python[\d.]*|node(?:js)?|ruby|php|bun|deno|lua", exe):
         return any(_WRITE_WORD.search(a) for a in argv[1:])
-    if exe in ("at", "batch"):
-        return not command["stdin"]
+    if exe in ("at", "batch"):   # at -l, -r, -d, -c and -V list, remove, show or print: they schedule nothing
+        return not command["stdin"] and not any(a in ("-l", "-r", "-d", "-c", "-V") for a in argv[1:])
     if exe == "osascript":
         return any(_APPLESCRIPT_WRITE.search(a) for a in argv[1:] + command["stdin"])
     return False
 
 
+_ZIP_VALUED = ("-b", "-n", "-t", "-tt", "-P", "-Z", "-s", "-O", "--out", "-lf", "-ds", "-sp", "-x", "-i")
+
+
 def _zip_moves(args):
-    """Whether zip's options say -m (--move): it deletes the files it adds."""
-    return any(a == "--move" or re.fullmatch(r"-[^-]*m[^-]*", a) for a in args)
+    """Whether zip's options say -m (--move): it deletes the files it adds. An m in an option's value (-b/tmp/m,
+    -s100m, -n.mp3, -Pmmm, a pattern after -x) isn't one."""
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+        elif a in _ZIP_VALUED:
+            skip = True
+        elif a == "--move" or re.fullmatch(r"-[^-bnPtZsOxi]*m[^-]*", a):   # an m before any option taking a value
+            return True
+    return False
 
 
 def _command_effects(commands):
@@ -596,7 +619,7 @@ def _command_effects(commands):
             for arg in args:
                 if skip:
                     skip = False
-                elif arg in ("-b", "-n", "-t", "-tt", "-P", "-Z", "-s", "-O", "--out", "-lf", "-ds", "-sp", "-x", "-i"):
+                elif arg in _ZIP_VALUED:
                     # lean: -x and -i take every word to the next option; a pattern after the first reads as a source,
                     # which only holds more; read the list if one is held wrongly
                     skip = True

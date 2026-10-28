@@ -118,6 +118,8 @@ def _canonical_host(host):
     the IPv4 address it reaches."""
     h = unicodedata.normalize("NFKC", _IGNORABLE.sub("", unquote(host)))
     h = _IGNORABLE.sub("", h).replace("\u3002", ".").casefold()
+    if not h.strip("."):   # nothing but invisible code points (and dots): no host to read, as an empty one is none
+        return _BAD
     ip = _address(h)
     if ip is None or ip is _BAD:
         return ip or h

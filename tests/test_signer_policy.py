@@ -414,6 +414,10 @@ class CodingPack(unittest.TestCase):
             ("mcp__postgres__query", {"sql": "DROP TEMPORARY TABLE t;"}),
             ("mcp__postgres__query", {"sql": "TRUNCATE TABLE invoices RESTART IDENTITY;"}),
             ("mcp__postgres__query", {"sql": "DELETE FROM users"}),
+            # more than one space or newline before the table
+            ("mcp__postgres__query", {"sql": "DELETE FROM  users"}),
+            ("mcp__postgres__query", {"sql": "DELETE FROM\n  users;"}),
+            ("mcp__postgres__query", {"sql": "DELETE FROM   users u RETURNING *"}),
             # tool names the round-1 list missed: postgresql and pg are SQL tools too
             ("mcp__postgresql__query", {"sql": "DROP TABLE users"}),
             ("mcp__pg__query", {"sql": "DROP TABLE users"}),
@@ -434,6 +438,9 @@ class CodingPack(unittest.TestCase):
             ("mcp__search__query", {"query": "DROP TABLE users"}),
             # a pure transaction, and a destructive statement through a non-SQL-named tool
             ("mcp__postgres__query", {"sql": "BEGIN; SELECT 1; ROLLBACK;"}),
+            ("mcp__postgres__query", {"sql": "DELETE FROM  users WHERE id = 1"}),
+            # a comment opened in the statement ends with it: another argument's text isn't run
+            ("mcp__postgres__query", {"sql": "/*", "x": "*/ DROP TABLE users"}),
             ("mcp__shell__execute", {"sql": "DROP TABLE users"}),
         ]
         for pack in ("coding.yaml", "dev.yaml", "server.yaml", "strict.yaml"):
@@ -691,13 +698,33 @@ class CodingPack(unittest.TestCase):
                    "zip --move -r /tmp/x.zip " + t, "ls " + t + "/* | zip -m@ /tmp/x.zip",
                    "echo 'rm -rf " + t + "' | sh", "cat <<'EOF' | sh\nrm -rf " + t + "\nEOF", "fish -c 'rm -rf " + t + "'",
                    "rm${IFS}-rf${IFS}" + t, "RM${IFS}-rf${IFS}" + t, "trap 'rm -rf ~/.codex/sessions' EXIT",
-                   "at now <<< 'rm -rf ~/.gemini/tmp'", "zip -rm /tmp/t.zip ~/.codex/sessions")
+                   "at now <<< 'rm -rf ~/.gemini/tmp'", "zip -rm /tmp/t.zip ~/.codex/sessions",
+                   "printf 'rm -rf %s' " + t + " | sh", "echo rm -rf " + t + " | bash", "$X rm -rf " + t,
+                   "\"$SHELL\" -c 'rm -rf " + t + "'", "pwsh -c 'Remove-Item " + t + "; rm " + t + "'",
+                   "echo 'ls > " + t + "/x.jsonl' | sh", "ls | xargs -I{} sh -c 'rm -rf " + t + "/{}'",
+                   "zip -T -m -r /tmp/x.zip " + t, "zip -rmT /tmp/x.zip " + t)
         kept = ("trap 'rm -rf \"$tmp\"' EXIT", "trap cleanup EXIT", "trap - EXIT", "zip -r out.zip " + t,
                 "zip -rm out.zip build", "at now <<< 'ls " + t + "'", "xargs -n1 echo <<< " + t,
                 "osascript -e 'display notification \"done\"'", "cat " + t + "/p/a.jsonl | xargs echo",
                 "echo 'ls " + t + "' | sh", "fish -c 'ls " + t + "'", "$PAGER " + t + "/p/a.jsonl",
                 "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; make test", "zip -rm logs.zip build/logs",
-                "at now + 1 hour <<< 'ls " + t + " > /tmp/sessions.txt'")
+                "at now + 1 hour <<< 'ls " + t + " > /tmp/sessions.txt'",
+                # an unreadable command reading transcripts, with a writer or `>` elsewhere on the line, or a value
+                # zip takes (-b, -s, -n), or at only listing jobs: held for a person (or allowed) as before, not denied
+                "find " + t + " -name '*.jsonl' | xargs -I{} sh -c 'wc -l < {}'",
+                "find " + t + " -name '*.jsonl' | xargs -I{} sh -c 'wc -l {}'", "find " + t + " -name '*.jsonl' | $PAGER",
+                "ls " + t + " 2>/dev/null | xargs -I{} sh -c 'du -sh " + t + "/{}'",
+                "$PAGER " + t + "/-Users-me-proj/0b1c2d3e.jsonl 2>/dev/null",
+                "cat " + t + "/-Users-me-proj/0b1c2d3e.jsonl 2>/dev/null | $PAGER",
+                "\"$PYTHON\" scripts/summarize_sessions.py " + t + " > /tmp/summary.md",
+                "${PYTHON:-python3} tools/usage.py --dir " + t + " --since 7d > report.txt",
+                "eval \"$(pyenv init -)\"; ls " + t + " > /tmp/x",
+                "trap \"$cleanup\" EXIT; ls " + t + " | tee /tmp/x", "at now <<< \"$JOB\"; find " + t + " -name '*.jsonl'",
+                "${PYTHON:-python3} - <<'EOF'\nimport glob, os\nfor f in glob.glob(os.path.expanduser('" + t
+                + "/*/*.jsonl')):\n    if os.path.getsize(f) > 0: print(f)\nEOF",
+                "zip -r -b/tmp backup.zip " + t, "zip -r -b/tmp/m backup.zip " + t, "zip -s100m -r backup.zip " + t,
+                "zip -Pmmm -r backup.zip " + t, "zip -ds10m -r backup.zip " + t, "zip -n.mp3 -r backup.zip " + t,
+                "zip -r backup.zip " + t + " -x '-m*'", "at -l; ls " + t, "at -r 3; ls " + t)
         for pack, engine, e in self.every_pack():
             for command in deletes:
                 with self.subTest(pack=pack, engine=engine, command=command):
@@ -710,9 +737,18 @@ class CodingPack(unittest.TestCase):
         self.verdicts([("trap 'sudo id' EXIT", "TK-D001"), ("at now <<< 'sudo id'", "TK-D001"),
                        ("batch <<EOF\ngit push --force origin main\nEOF", "TK-D003")])
         # code they run that the parser can't read (a name from a variable) isn't held, as before it was read
-        for command in ('trap "$cleanup" EXIT', 'at now <<< "$JOB"', "batch <<EOF\n$JOB\nEOF"):
+        for command in ('trap "$cleanup" EXIT', 'at now <<< "$JOB"', "batch <<EOF\n$JOB\nEOF",
+                        "at now <<'EOF'\n$($X)\nEOF"):
             with self.subTest(command=command):
                 self.assertNotIn("TK-SHELL-PARSE", self.e.decide("Bash", {"command": command})["rule_ids"])
+        # but a substitution in an unquoted heredoc runs now, in the agent's shell, before at gets the text
+        for pack, engine, e in self.every_pack():
+            for command in ("at now <<EOF\n$($X)\nEOF", "at now <<EOF\necho $($X)\nEOF", "batch <<EOF\n`$X`\nEOF",
+                            "at now <<EOF\n$(eval \"$P\")\nEOF"):
+                with self.subTest(pack=pack, engine=engine, command=command):
+                    d = e.decide("Bash", {"command": command})
+                    self.assertIn("TK-SHELL-PARSE", d["rule_ids"], d)
+                    self.assertIn(d["verdict"], ("ask", "deny"), d)
 
     def test_an_internal_host_with_invisible_characters_decides_as_the_plain_host(self):
         """A soft hyphen or a zero-width character in a host is dropped by a browser's or Node's URL parser, so
@@ -727,7 +763,8 @@ class CodingPack(unittest.TestCase):
                 for plain, hidden in (("http://127.0.0.1/admin", "http://127.0.0.1­/admin"),
                                       ("http://169.254.169.254/latest/", "http://169.254.169.254​/latest/"),
                                       ("http://db.internal/", "http://db.inter­nal/"),
-                                      ("http://localhost:8080/", "http://local⁠host:8080/")):
+                                      ("http://localhost:8080/", "http://local⁠host:8080/"),
+                                      ("http://intranet/", "http://ㅤ/"), ("http://intranet:80/", "http://%C2%AD:80/")):
                     with self.subTest(pack=pack, engine=engine, tool=tool, url=hidden):
                         a = e.decide(tool, {key: plain, **extra})
                         b = e.decide(tool, {key: hidden, **extra})

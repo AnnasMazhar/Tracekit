@@ -2,12 +2,13 @@
 
 `parse(command)` returns every simple command the line would run, including those reached through wrappers, `sh -c`
 strings, substitutions, heredocs into a shell, at or batch, trap's action and interpreter one-liners:
-`{"argv": [...], "via": [...], "pipeline": n, "glob": bool, "opaque": bool, "stdin": [...]}`. argv[0] is a basename,
-the part after any `\\` in lower case and without a `.exe` (the agent's file system may ignore case: macOS runs git
-for `Git`; Windows runs git.exe for git); `via` says how the command was reached (empty at top level); commands with the same `pipeline` are stages of one pipeline, in order. `opaque`: what
-the command runs cannot be read from the line (a glob, brace or expansion in its name, a shell or interpreter reading
-its script from a pipe, a file or inherited stdin, `source` of a stream). `stdin`: the herestring and heredoc text the
-command reads (the names `xargs rm <<< x` deletes).
+`{"argv": [...], "word": str, "via": [...], "pipeline": n, "glob": bool, "opaque": bool, "stdin": [...]}`. argv[0] is
+a basename, the part after any `\\` in lower case and without a `.exe` (the agent's file system may ignore case: macOS
+runs git for `Git`; Windows runs git.exe for git); `word` is that first word as written (a path, or the text of a name
+an expansion builds); `via` says how the command was reached (empty at top level); commands with the same `pipeline`
+are stages of one pipeline, in order. `opaque`: what the command runs cannot be read from the line (a glob, brace or
+expansion in its name, a shell or interpreter reading its script from a pipe, a file or inherited stdin, `source` of
+a stream). `stdin`: the herestring and heredoc text the command reads (the names `xargs rm <<< x` deletes).
 Variables are not expanded and encodings are not decoded. A line it cannot parse raises ParseError.
 
 `analyse(command)` also returns the normalised lines: each parsed script with quotes and escapes resolved and
@@ -727,8 +728,8 @@ class _Parser:
             # xargs -I{} inserting its input into a script or a command name: what runs comes from stdin
             tainted = repl is not None and (repl in argv[0] or (
                 (name in SHELLS or _kind(name)) and any(repl in a for a in args)))
-            cmd = {"argv": [name] + args, "via": via, "pipeline": pid, "glob": glob, "opaque": unreadable[0] or tainted,
-                   "stdin": []}
+            cmd = {"argv": [name] + args, "word": argv[0], "via": via, "pipeline": pid, "glob": glob,
+                   "opaque": unreadable[0] or tainted, "stdin": []}
             self.ctx["cmds"].append(cmd)
             cmds.append(cmd)
             if name in DASH_C:
@@ -863,7 +864,8 @@ class _Parser:
                 self.nested(body, shell["via"] + [shell["argv"][0] + " <<"])
             elif interp:
                 self.program(interp, body, " <<")
-            if not shell and d["expand"]:
+            # an unquoted heredoc's substitutions run now, in this shell, also before at or batch get the text
+            if (not shell or shell["argv"][0] not in SHELLS) and d["expand"]:
                 _Parser(body, self.ctx, d["via"] + ["<<"]).dquote(None)
 
     def word(self):

@@ -511,7 +511,8 @@ class Prefilter(unittest.TestCase):
 class Speed(unittest.TestCase):
     """The fallback engine (`regex`) on 64 KiB built to make a pattern back off or rescan."""
     BUDGET_S = 0.15   # the slowest shipped pattern: ~20 ms on an M-series Mac, ~60 ms on CI runners; a rescan, 0.3 s+
-    FILLERS = (" -", " -a", " --de", ":", "0" * 39 + "x", "x\n", "--x", "/.", "\\", "a=", '"', "@", " ", "\t", "\\n")
+    FILLERS = (" -", " -a", " --de", ":", "0" * 39 + "x", "x\n", "--x", "/.", "\\", "a=", '"', "@", " ", "\t", "\\n",
+               '{"sql":"/*"},', '{"sql":"-- "},')
     # lean: these look for one thing after another with any text between, on a command line (TK-D002 a download, then a
     # pipe into a shell; TK-D004 a recursive option, then a root or home path; TK-D006, TK-D011 a read or upload, then
     # a secrets file, or a read piped into an upload; TK-D007 kill or launchctl, then tracekit; TK-C010 kubectl delete,
@@ -636,6 +637,12 @@ class Speed(unittest.TestCase):
                  for unit in (" ", "\t", bs + "n", bs + "n ")]
         calls += [("mcp__db__run", {key: pre + (unit * n)[:n]}) for key in ("sql", "query")
                   for pre in ("", "DROP ", "DELETE FROM x a") for unit in (" ", "\t", "\n")]
+        # a long short-option cluster after the client (review of 1.5.0's fix), and a comment opened in each of many
+        # SQL strings, which read on past the string's closing quote
+        calls += [("Bash", {"command": "mysql -e" + "x" * n}), ("Bash", {"command": "psql -" + "c" * n}),
+                  ("Bash", {"command": "psql -c 'SELECT 1' -c" + "x" * (n - 24)})]
+        calls += [("mcp__db__run", {"rows": [{key: text}] * (n // 16)}) for key in ("sql", "query")
+                  for text in ("/*", "-- ", "/* x")]
         for tool, args in calls:
             with self.subTest(tool=tool, start=str(args)[:40]):
                 out = []
@@ -1201,6 +1208,11 @@ class Classes(unittest.TestCase):
         self.assertEqual(classes.url_info("https://exam­ple.com/"), {"scheme": "https", "host": "example.com",
                                                                           "internal": False})
         self.assertEqual(classes.url_info("http://local​host:8080/")["host"], "localhost")
+        # a host of nothing but invisible code points names no host: it is no address, as an empty one would be
+        for url in ("http://ㅤ/", "http://%C2%AD:80/", "http://​./", "http://ﾠ/x", "http://­​/"):
+            with self.subTest(url=url):
+                self.assertEqual(classes.url_info(url)["internal"], True)
+                self.assertIsNone(classes.url_info(url)["host"])
 
     def test_reading_a_long_url_is_linear(self):
         """A URL near the 1 MB frame limit took seconds per reading, and a decide reads it once per target rule too:
