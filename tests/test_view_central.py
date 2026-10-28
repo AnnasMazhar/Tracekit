@@ -189,8 +189,8 @@ class CentralViewer(unittest.TestCase):
 
     def test_a_list_checks_a_run_only_with_a_check_slot_free(self):
         """A list checked every run whose verdict was old or missing, with no limit: 16 lists at once made 91 checks of
-        6 runs. With both check slots taken it checks none: a kept verdict shows as it is, a run never checked as NOT
-        CHECKED."""
+        6 runs. With the list's check slot taken it checks none: a kept verdict shows as it is, a run never checked as
+        NOT CHECKED."""
         def listed(port):
             runs = json.loads(self.get("/api/runs", self.admin, port)[2])["runs"]
             return {self.names[r["run_id"]]: r["verdict"]["integrity"] for r in runs if r["run_id"] in self.names}
@@ -199,13 +199,38 @@ class CentralViewer(unittest.TestCase):
         kept = listed(port)
         self.assertEqual(set(kept.values()), {"VERIFIED"})
         for r in (runs, fresh):
-            r.verifying.acquire()
-            r.verifying.acquire()
+            r.listing.acquire()
         with mock.patch.object(view, "check", wraps=view.check) as checked, \
                 mock.patch.object(view.time, "time", return_value=time.time() + view.RECHECK_S + 1):
             self.assertEqual(listed(port), kept)
             self.assertEqual(listed(fresh_port), dict.fromkeys(kept, "NOT CHECKED"))
         self.assertEqual(checked.call_count, 0)
+
+    def test_a_run_page_has_a_check_slot_while_lists_check_and_two_lists_check_a_run_once(self):
+        """Lists took the run pages' two check slots: during two lists that were checking, a run page got 503 on every
+        try (runs.html doesn't try again), and the two lists checked the same runs twice (14 checks for 7 runs)."""
+        runs = view.Runs(self.files)
+        port = self.serve(runs)
+        real, gate, entered, hold = view.check, threading.Event(), [], [True]
+
+        def check(r, tenant, run_id, *a, **k):   # a list's check waits at the gate, holding its slot
+            entered.append((run_id, a[1]))   # a run of a log (its trust file): both logs hold the signer's own run
+            if hold[0]:
+                gate.wait(20)
+            return real(r, tenant, run_id, *a, **k)
+        with mock.patch.object(view, "check", side_effect=check):
+            lists = [threading.Thread(target=self.get, args=("/api/runs", self.admin, port)) for _ in range(2)]
+            for t in lists:
+                t.start()
+            self.assertTrue(wait_for(lambda: len(entered) == 2 or sum(t.is_alive() for t in lists) == 1, 10))
+            hold[0] = False
+            self.assertEqual(self.get(f"/api/run?log=0&tenant=acme&run={self.ids['a1']}", self.acme, port)[0], 200)
+            gate.set()
+            for t in lists:
+                t.join(20)
+        listed = entered[:1] + entered[2:]   # the run page's check is the second
+        self.assertEqual(sorted(listed), sorted(set(listed)))   # each run checked once
+        self.assertLessEqual(set(self.ids.values()), {run_id for run_id, _ in entered})   # a1's too: the page's verdict
 
     def test_a_run_page_checks_two_runs_at_once_at_most(self):
         """Each /api/run request read the log and exported and verified its run with no limit: 16 at once made 16 full
