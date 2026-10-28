@@ -23,6 +23,7 @@ from google.adk.plugins.base_plugin import BasePlugin
 from pydantic_core import to_jsonable_python
 
 from tracekit.integrations import said
+from tracekit.integrations import version_check
 from tracekit.integrations.gate import complete, gate_call, run_handle
 from tracekit.sdk.client import result_field
 
@@ -33,6 +34,8 @@ class Tracekit(BasePlugin):
     an AsyncRunHandle works too."""
 
     def __init__(self, run):
+        version_check.warn_untested("Google ADK", "google-adk", (2, 12), (2, 13),
+                                    "google-adk>=2.12,<2.13")
         run = run_handle(run)
         super().__init__(name="tracekit")
         self.run, self._warned = run, False

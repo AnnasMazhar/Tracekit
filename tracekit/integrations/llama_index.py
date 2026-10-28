@@ -32,6 +32,7 @@ from workflows.runtime.types.results import WaitingForEvent
 
 from tracekit.autowire import DECIDED_UPSTREAM
 from tracekit.integrations import said
+from tracekit.integrations import version_check
 from tracekit.integrations.gate import complete, gate_call, run_handle
 from tracekit.sdk.client import result_field
 
@@ -42,6 +43,8 @@ class Tracekit:
     too."""
 
     def __init__(self, run):
+        version_check.warn_untested("LlamaIndex", "llama-index-core", (0, 14, 25), (0, 15),
+                                    "llama-index-core>=0.14.25,<0.15")
         self.run = run_handle(run, instrument=True)
         # lean: one entry per call this object ran, for its life; prune them at run end if agents run for days
         self._attempts = {}   # tool_id -> the attempt its next execution is (a step LlamaIndex runs again)
