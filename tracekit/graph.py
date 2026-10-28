@@ -19,9 +19,9 @@ has a grade (`grade`) and cites the record it came from (`record`: run_id, run_s
                 about a record
     OBSERVED    an observer outside the agent saw it: egress hosts, kernel sensor connections and files; a run's, never
                 a call's (the call id a process carries is the agent's claim)
-    INFERRED    tracekit why's causal graph of the run and the signed why tests about it (why.finding), why's own grade
-                kept (`why_evidence`); and the Graphify join (`join`: "graphify"): a code node in a file the graph has
-                (`record` names the Graphify file)
+    INFERRED    tracekit why's causal graph of the run and the signed why tests about it the verifier counts
+                (why.finding; `author`, its author's label), why's own grade kept (`why_evidence`); and the Graphify
+                join (`join`: "graphify"): a code node in a file the graph has (`record` names the Graphify file)
     UNVERIFIED  any of these from a bundle that fails verification against the trust config, or a Graphify join for a
                 file named only by failed bundles (`claimed`: the grade it would have): kept, never dropped
 
@@ -326,15 +326,16 @@ def _host(args: Any) -> Optional[str]:
 
 
 def _args_digest(args: Any) -> str:
-    """A stable, non-revealing identity for the opened arguments behind a call-target edge."""
+    """The opened arguments behind a call-target edge, as build compares them (_supersede); never written out: unsalted,
+    it would test guesses of what the bundle's salted commitment hides."""
     return hashlib.sha256(json.dumps(args, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
 def _add_run(g: Graph, recs: List[Dict[str, Any]], ok: bool, args: Optional[Dict[int, Any]] = None,
-             index: Optional[Dict[tuple, Dict[str, Any]]] = None) -> None:
+             index: Optional[Dict[tuple, Dict[str, Any]]] = None, counted: Optional[Dict[tuple, str]] = None) -> None:
     """The nodes and SIGNED and OBSERVED edges of one run's records. `args`: run_seq -> the decided arguments of a
     call, opened against its record's commitment (None: none were read); `index`: (run_id, run_seq) -> record of every
-    run read, for the records a finding cites."""
+    run read, for the records a finding cites; `counted`: the why tests the verifier counts (_counted)."""
     first = recs[0]["event"]
     rid = first["run_id"]
     run = _node(g, "run:" + rid, "run", rid, ts=first["ts"])
@@ -382,13 +383,13 @@ def _add_run(g: Graph, recs: List[Dict[str, Any]], ok: bool, args: Optional[Dict
             for p in _written(d.get("tool"), body):
                 _edge(g, ok, call, _node(g, "file:" + p, "file", p),
                       "wrote" if attested else "reported writing" if done else "asked to write", "SIGNED",
-                      result_at, args_digest=_args_digest(body),
+                      result_at, _args=_args_digest(body),
                       **({"args_commitment": d["args_commitment"]} if d.get("args_commitment") else {}))
             host = _host(body)
             if host:
                 _edge(g, ok, call, _node(g, "host:" + host, "host", host),
                       "reached" if attested else "reported reaching" if done else "asked to reach", "SIGNED", result_at,
-                      args_digest=_args_digest(body),
+                      _args=_args_digest(body),
                       **({"args_commitment": d["args_commitment"]} if d.get("args_commitment") else {}))
         elif t == "tool.result" and d.get("decision_id") in calls:   # its decision's, as the verifier joins them
             by_seq[e["run_seq"]] = _node(g, calls[d["decision_id"]], "call", "?",
@@ -437,10 +438,10 @@ def _add_run(g: Graph, recs: List[Dict[str, Any]], ok: bool, args: Optional[Dict
                     _node(g, "run:" + str(about), "run", str(about))]:
                 _edge(g, ok, f, n, "found in", "SIGNED", at)
         elif t == "why.finding":
-            about = str(_about(recs))
+            about, author = str(_about(recs)), (counted or {}).get((rid, e["run_seq"]))
             f = _node(g, f"finding:{rid}:{e['run_seq']}", "finding",
-                      f"why test: without {d.get('intervention')}, {d.get('target')}: {d.get('verdict')}",
-                      effect=d.get("effect"))
+                      f"why test: without {d.get('intervention')}, {d.get('target')}: {d.get('verdict')} "
+                      f"({author or 'not counted'})", effect=d.get("effect"), **({"author": author} if author else {}))
             _edge(g, ok, f, _node(g, "run:" + about, "run", about), "tested " + str(d.get("verdict")), "SIGNED", at)
         for rule in (d.get("redaction") or {}).get("rules") or []:
             _edge(g, ok, _of(g, e, calls), _node(g, "secret:" + rule, "secret", rule), "held a secret (redacted)",
@@ -451,8 +452,9 @@ def _add_run(g: Graph, recs: List[Dict[str, Any]], ok: bool, args: Optional[Dict
 
 def _add_why(g: Graph, recs: List[Dict[str, Any]], ok: bool, tests=(), args: Optional[Dict[int, Any]] = None) -> None:
     """INFERRED edges: tracekit why's causal graph of the run, mapped onto this graph's nodes, and the signed why tests
-    about the run (`tests`: (why.finding record, whether its source verified)) whose verdict is causal or
-    suppressive, from what the test removed to the calls of its target. `args`: as _add_run's, for the call nodes."""
+    about the run the verifier counts (`tests`: (why.finding record, its author's label), _counted) whose verdict is
+    causal or suppressive, from what the test removed to the calls of its target. `args`: as _add_run's, for the call
+    nodes."""
     from .why.core import load_run
     from .why.graph import build_graph, nodes_matching, target_hits
     from .why.import_v2 import convert
@@ -481,7 +483,7 @@ def _add_why(g: Graph, recs: List[Dict[str, Any]], ok: bool, tests=(), args: Opt
                 ev = wg.nodes[e["dst"]]["event"]
                 _edge(g, ok, src, dst, e["kind"], "INFERRED", _cite({**ev["tracekit"], "ts": ev["ts"]}),
                       why_evidence=e["evidence"])
-        for rec, verified in tests:
+        for rec, author in tests:
             t = rec["event"]["data"]
             if t.get("verdict") not in ("causal", "suppressive"):
                 continue
@@ -494,8 +496,31 @@ def _add_why(g: Graph, recs: List[Dict[str, Any]], ok: bool, tests=(), args: Opt
                 for x in dsts:
                     a, b = ours(s), ours(x)
                     if a and b:
-                        _edge(g, ok and verified, a, b, f"{t['verdict']} (tested)", "INFERRED", _cite(rec["event"]),
-                              why_evidence="tested", effect=t.get("effect"))
+                        _edge(g, ok, a, b, f"{t['verdict']} (tested)", "INFERRED", _cite(rec["event"]),
+                              why_evidence="tested", effect=t.get("effect"), author=author)
+
+
+def _counted(runs: List[List[Dict[str, Any]]], trust: str) -> Dict[tuple, str]:
+    """(run_id, run_seq) of each why.finding of verified runs `runs` the verifier counts -> its author's label
+    (verify.v2._label; `author not checked` without the analysed run). The verifier's findings check (v2._findings)
+    runs over each analysed run with its findings and replay runs, as over the run's `--with-findings` export: a finding
+    whose replay runs are not there, or do not give its verdict, fails that export, so none about the run counts."""
+    from .verify import v2
+    by_id = {recs[0]["event"]["run_id"]: recs for recs in runs}
+    about = sorted({_about(recs) for recs in runs if any(r["event"]["type"] == "why.finding" for r in recs)} - {None})
+    pinned = v2.load_trust(trust)["analyzers"] if about else []
+    out: Dict[tuple, str] = {}
+    for a in about:
+        group = {rid: recs for rid, recs in by_id.items() if a in (rid, *v2._about(recs)[:2])}
+        rep = v2.Report()
+        v2._findings(rep, group)
+        if {"findings", "findings counted"} & {*rep.failures, *rep.warnings}:
+            continue
+        for rid, recs in group.items():
+            if _about(recs) == a:
+                label = v2._label(recs, by_id[a], pinned)[0] if a in by_id else "author not checked"
+                out.update({(rid, r["event"]["run_seq"]): label for r in recs if r["event"]["type"] == "why.finding"})
+    return out
 
 
 def _merge(g: Graph, staged: Graph) -> None:
@@ -582,14 +607,16 @@ def build(paths: List[str], trust: str, content: Optional[Content] = None,
     read = [(src, {rid: _qualified(recs, shared) for rid, recs in rs.items()}) for src, rs in read]
     runs = sorted(((src, rs[rid]) for src, rs in read for rid in sorted(rs)), key=lambda x: bool(_about(x[1])))
     index: Dict[tuple, Dict[str, Any]] = {}
-    tests: Dict[str, List[tuple]] = {}   # run_id -> the why.finding records about it
+    counted = _counted([recs for src, recs in runs if src["verify"]["ok"]], trust)
+    tests: Dict[str, List[tuple]] = {}   # run_id -> the counted why.finding records about it, with their author's label
     for src, recs in runs:
         if not src["verify"]["ok"]:
             continue
         for r in recs:
-            index.setdefault((r["event"]["run_id"], r["event"]["run_seq"]), r)
-            if r["event"]["type"] == "why.finding" and _about(recs):
-                tests.setdefault(str(_about(recs)), []).append((r, src["verify"]["ok"]))
+            key = (r["event"]["run_id"], r["event"]["run_seq"])
+            index.setdefault(key, r)
+            if key in counted:
+                tests.setdefault(str(_about(recs)), []).append((r, counted[key]))
     g = Graph(None, "grade")  # type: ignore[arg-type]
     for src, rs in sorted(read, key=lambda item: all(_about(recs) for recs in item[1].values())):
         staged = _staged(g)
@@ -605,12 +632,13 @@ def build(paths: List[str], trust: str, content: Optional[Content] = None,
                         args = content(rid, recs)
                     except Exception as e:   # the vault's content does not open its record, or the signer gives none
                         src.setdefault("content_unread", []).append(f"run {rid}: {type(e).__name__}: {e}")
-                _add_run(staged, recs, ok, args, index)
+                _add_run(staged, recs, ok, args, index, counted)
                 _add_why(staged, recs, ok, tests.get(recs[0]["event"]["run_id"], ()), args)
         except Exception as e:
             src["unreadable"] = f"{type(e).__name__}: {e}"
         else:
             _merge(g, staged)
+    _supersede(g)
     joined = _graphify(g, graphify, _graphify_data) if graphify else None
     with open(trust, "rb") as f:
         trust_sha256 = hashlib.sha256(f.read()).hexdigest()
@@ -668,12 +696,25 @@ def _outcomes(g: Graph) -> OutcomeIndex:
 
 
 def _not_run(e: Dict[str, Any], outcomes: OutcomeIndex) -> bool:
-    """Whether an asked edge has no later same-argument outcome at its own evidence grade."""
+    """Whether an asked edge has no later same-argument outcome at its own evidence grade (`superseded_by`:
+    _supersede)."""
     return e["kind"] in ASKED and not any(
-        other["grade"] == e["grade"]
-        and other.get("args_digest", other.get("args_commitment")) == e.get("args_digest", e.get("args_commitment"))
-        and other["record"].get("run_seq", -1) > e["record"].get("run_seq", -1)
+        other["grade"] == e["grade"] and other["record"] == e.get("superseded_by")
         for other in outcomes.get((e["src"], e["dst"]), ()))
+
+
+def _supersede(g: Graph) -> None:
+    """Point each asked edge at a later outcome of the same call to the same target, at its grade, from the same opened
+    arguments (`superseded_by`: that outcome's record), then drop the arguments' digests (_args_digest)."""
+    outcomes = _outcomes(g)
+    for e in g.edges:
+        if e["kind"] in ASKED:
+            later = [o["record"] for o in outcomes.get((e["src"], e["dst"]), ()) if o["grade"] == e["grade"]
+                     and o.get("_args") == e["_args"] and o["record"]["run_seq"] > e["record"]["run_seq"]]
+            if later:
+                e["superseded_by"] = later[0]
+    for e in g.edges:
+        e.pop("_args", None)
 
 
 def _shown(e: Dict[str, Any], outcomes: OutcomeIndex) -> bool:

@@ -65,7 +65,7 @@ also carry these fields:
 | host | `host:HOST` | |
 | secret | `secret:RULE` | |
 | rule | `rule:RULE_ID` | |
-| finding | `finding:RUN_ID:RUN_SEQ` | `reviewer` or `effect` |
+| finding | `finding:RUN_ID:RUN_SEQ` | `reviewer`, or a why test's `effect` and, when the verifier counts it, `author` |
 | approval | `approval:APPROVAL_ID` | |
 | gap | `gap:RUN_ID:RUN_SEQ` | |
 | code | `code:GRAPHIFY_ID` | `source_file`, and sometimes `source_location` |
@@ -92,7 +92,7 @@ source.
 |---|---|---|
 | `SIGNED` | A signer record | `ran`, `started`, `analyses`, decisions, rule decisions, provenance, approvals, redactions, gaps, findings, and call file or host edges |
 | `OBSERVED` | An egress or kernel observer | A run `reached :PORT` or was `blocked from reaching :PORT`; a run had a `file event (SENSOR)` |
-| `INFERRED` | `tracekit why` or Graphify | Why context and influence edges (`why_evidence` keeps why's grade), signed why-test causal or suppressive edges, and Graphify `contains` |
+| `INFERRED` | `tracekit why` or Graphify | Why context and influence edges (`why_evidence` keeps why's grade), signed why-test causal or suppressive edges the verifier counts (`author`), and Graphify `contains` |
 | `UNVERIFIED` | A readable source that failed verification | The same edge kinds, with `claimed` |
 
 The signed edge kinds include:
@@ -112,9 +112,17 @@ Observed edges are always edges of a run, not a call. A process's call id is an 
 join it to an observer result. Egress edges have `observer` and, for network effects, `explained_by`; sensor file
 edges have `observer`.
 
-An `asked to write` or `asked to reach` edge remains in `graph.json`. Queries and reports hide it only when a later
-outcome from the same call to the same target has the same `args_digest` (or an older graph's `args_commitment`) and
-the same grade. It is not, by itself, a failed attempt.
+An `asked to write` or `asked to reach` edge remains in `graph.json`. Queries and reports hide it only when its
+`superseded_by` names the record of a later outcome from the same call to the same target, at the same grade: build
+found that call's decided arguments the same. It is not, by itself, a failed attempt. `graph.json` holds no digest of
+the arguments: an unsalted one would let anyone test guesses of what the bundle's salted commitment hides.
+
+A signed why test (`why.finding`) is drawn as `causal (tested)` or `suppressive (tested)` only when the verifier counts
+it: build runs the verifier's findings check over the analysed run with its findings and replay runs from the verified
+sources, as over the run's `--with-findings` export. A finding whose replay runs are missing, or don't give its
+verdict, leaves every why test about that run uncounted. A counted test's finding and edges carry `author`, the
+verifier's label for who wrote it (`self-asserted`, `independent`, `unpinned author ID`, or `author not checked`
+without the analysed run), and its label ends with it; an uncounted one's label ends `(not counted)`.
 
 ## Query
 

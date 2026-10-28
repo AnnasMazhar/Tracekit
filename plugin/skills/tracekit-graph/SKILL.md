@@ -83,8 +83,8 @@ Exit 1 means nothing matched; 2 means a bad node or graph. For a question no mod
   Only `wrote` and `reached` come from a Tracekit T2 executor or gateway result; observer edges remain `OBSERVED`.
 - An `asked to write` or `asked to reach` edge did not run (or did not succeed) only when no later edge from the same
   call to the same target has the same arguments and grade and says `wrote`, `reported writing`, `reached`, or
-  `reported reaching`. In graph.json, compare `args_digest` (or `args_commitment` in older graphs), grade, and
-  `record.run_seq`; superseded asked edges remain there, so do not report them as a failed attempt.
+  `reported reaching`. In graph.json, such an asked edge has `superseded_by`, that outcome's record; superseded asked
+  edges remain there, so do not report them as a failed attempt.
 - Say what the graph cannot show: it holds what the records hold, nothing outside them. No edge means no record,
   not proof that nothing happened (check gaps and `unread_args`).
 - Point the person to the record: the run id and record (`run_seq`) of each edge, and the source bundle in `sources`

@@ -5,13 +5,14 @@ The end-to-end runs are real: one in-process signer set up as the dev signer is 
 analyzer), plus an egress observer's grant the dev signer doesn't give, records a Claude Code session through the v2
 hook command `tracekit init --v2` wires (a write, a denied call, an approved call, a fetch, a lost transcript tailer and
 the egress observer's hosts), a tracekit why runtime run (an untrusted input, a model call, secrets the signer
-redacts) and a findings run about it (a signed finding, and a why.finding as `tracekit why test` writes one; its replay
-runs are not run here, which the verifier counts a warning). Each is exported as `tracekit export --v2` does, one copy
-tampered.
+redacts) and a findings run about it (a signed finding, and a why.finding as `tracekit why test` writes one, from replay
+runs whose model calls a gateway recorded; exported with them and, as the verifier does not count it, without). Each
+is exported as `tracekit export --v2` does, one copy tampered.
 
     python3 -m pytest tests/test_graph.py -q
 """
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -26,12 +27,14 @@ from unittest import mock
 
 from factories import ROOT, SLOWER, patch_env, rewrite_bundle
 from tracekit import cli, graph, install
+from tracekit.bundle_v2 import export
 from tracekit.demo_server import Witness, _serve, export_final
 from tracekit.deploy import files
 from tracekit.identity.base import CallerIdentity
 from tracekit.integrations import claude_code
 from tracekit.sdk.client import Client, RunHandle
 from tracekit.signer import service
+from tracekit.storage.file import FileReader
 from tracekit.verify.v2 import _CONTROL
 from tracekit.why import import_v2
 from tracekit.why.core import Runtime
@@ -40,6 +43,7 @@ from tracekit.why.signed import EvidenceAlert
 
 HOOK = install._hook_command(install.V2_HOOK)
 OBSERVER = CallerIdentity("mtls", "spiffe://test/egress", True)
+GATEWAY = CallerIdentity("mtls", "spiffe://test/gateway", True)   # an LLM gateway: records the replay runs' model calls
 TS = "2026-10-27T10:00:00.000000Z"
 KINDS = {"run", "agent", "person", "call", "input", "model", "file", "host", "secret", "rule", "finding", "approval",
          "gap", "code"}
@@ -123,6 +127,7 @@ class CallOutcomes(unittest.TestCase):
                    rec(3, "tool.result", {"tool_use_id": "c", "decision_id": "later", "ok": True})]
         g = Graph(None, "grade")
         graph._add_run(g, records, True, {1: {"file_path": "/repo/.env"}, 2: {"file_path": "/repo/.env"}})
+        graph._supersede(g)
         doc = {"schema_version": graph.SCHEMA_VERSION, "tracekit": "test", "content": True, "graphify": None,
                "sources": [], "nodes": list(g.nodes.values()), "edges": g.edges}
         report = graph.highlights(doc)
@@ -141,34 +146,34 @@ class CallOutcomes(unittest.TestCase):
             return rec(seq, "policy.decision", {"tool_use_id": "c", "decision_id": did, "tool": "Write",
                                                   "decision": "allow", "args_commitment": commitment})
 
-        g = Graph(None, "grade")
-        graph._add_run(g, [rec(0, "run.registered", {"agent": {"name": "a"}}), decision(1, "first", "same"),
-                           decision(2, "second", "same"), rec(3, "tool.result", {"tool_use_id": "c",
-                           "decision_id": "second", "ok": True})], True,
-                       {1: {"file_path": "/repo/x", "content": "first"},
-                        2: {"file_path": "/repo/x", "content": "second"}})
-        doc = {"schema_version": graph.SCHEMA_VERSION, "tracekit": "test", "content": True, "graphify": None,
-               "sources": [], "nodes": list(g.nodes.values()), "edges": g.edges}
-        self.assertEqual(set(e["kind"] for r in graph.matching(doc, "file", "/repo/x")["runs"]
-                             for e in r["matched"]), {"asked to write", "reported writing"})
+        def shown(*copies):   # (records, verified, arguments) of each copy of the run read
+            g = Graph(None, "grade")
+            for records, ok, args in copies:
+                graph._add_run(g, [rec(0, "run.registered", {"agent": {"name": "a"}}), *records], ok, args)
+            graph._supersede(g)
+            doc = {"schema_version": graph.SCHEMA_VERSION, "tracekit": "test", "content": True, "graphify": None,
+                   "sources": [], "nodes": list(g.nodes.values()), "edges": g.edges}
+            return {(e["kind"], e["grade"]) for r in graph.matching(doc, "file", "/repo/x")["runs"]
+                    for e in r["matched"]}
 
-        g = Graph(None, "grade")
-        graph._add_run(g, [rec(0, "run.registered", {"agent": {"name": "a"}}), decision(1, "first", "one"),
-                           rec(2, "tool.result", {"tool_use_id": "c", "decision_id": "first", "ok": True}),
-                           decision(3, "later", "one")], True,
-                       {1: {"file_path": "/repo/x", "content": "same"},
-                        3: {"file_path": "/repo/x", "content": "same"}})
-        doc["nodes"], doc["edges"] = list(g.nodes.values()), g.edges
-        self.assertEqual(set(e["kind"] for r in graph.matching(doc, "file", "/repo/x")["runs"]
-                             for e in r["matched"]), {"asked to write", "reported writing"})
+        def ran(seq, did):
+            return rec(seq, "tool.result", {"tool_use_id": "c", "decision_id": did, "ok": True})
 
-        digest = next(e["args_digest"] for e in g.edges if e["kind"] == "asked to write")
-        g.add_edge("call:r-obs:first", "file:/repo/x", "reported writing", "UNVERIFIED",
-                   record={"run_id": "r-obs", "run_seq": 4, "seq": 104, "ts": TS}, claimed="SIGNED",
-                   args_commitment="one", args_digest=digest)
-        doc["edges"] = g.edges
-        self.assertIn("asked to write", {e["kind"] for r in graph.matching(doc, "file", "/repo/x")["runs"]
-                                           for e in r["matched"]})
+        same, both = {"file_path": "/repo/x", "content": "same"}, {("asked to write", "SIGNED"),
+                                                                   ("reported writing", "SIGNED")}
+        self.assertEqual(shown(([decision(1, "first", "same"), decision(2, "second", "same"), ran(3, "second")], True,
+                                {1: {"file_path": "/repo/x", "content": "first"},
+                                 2: {"file_path": "/repo/x", "content": "second"}})), both)
+        self.assertEqual(shown(([decision(1, "first", "one"), decision(2, "later", "two"), ran(3, "later")], True,
+                                {1: same, 2: same})), {("reported writing", "SIGNED")})
+        self.assertEqual(shown(([decision(1, "first", "one"), ran(2, "first"), decision(3, "later", "one")], True,
+                                {1: same, 3: same})), both)
+        # the same arguments run later in an unverified copy of the run: that hides the copy's own ask only
+        self.assertEqual(shown(([decision(1, "first", "one"), ran(2, "first"), decision(3, "later", "one")], True,
+                                {1: same, 3: same}),
+                               ([decision(1, "first", "one"), decision(3, "later", "one"), ran(4, "later")], False,
+                                {1: same, 3: same})),
+                         both | {("reported writing", "UNVERIFIED")})
 
     def test_many_asked_edges_are_indexed_once_per_query(self):
         class CountingEdges(list):
@@ -711,9 +716,11 @@ class EndToEnd(unittest.TestCase):
         cls.witness = Witness()
         cfg = service.dev_content()
         cfg["authorize"]["mtls:spiffe://test/egress"] = ["observe_effect"]
+        cfg["authorize"]["mtls:spiffe://test/gateway"] = ["model_event"]
         cls.service = service.SignerService(os.path.join(cls.dir, "data"), witnesses=[cls.witness],
                                             isolation="same-user", grace_s=0.2, fsck_every_s=0, observe_grace_s=0,
-                                            analyzers=[service._dev_identity()], **cfg)
+                                            analyzers=[service._dev_identity()],
+                                            gateways=["mtls:spiffe://test/gateway"], **cfg)
         cls.sock, cls.srv = _serve(cls.dir, cls.service)
         os.environ["TRACEKIT_SIGNER"] = cls.sock   # the hook's and --content's signer; patch_env restores it
         cls.client = Client(cls.sock)
@@ -721,14 +728,17 @@ class EndToEnd(unittest.TestCase):
         files.write_json(cls.trust, {"logs": [cls.service.vkey], "algs": ["ed25519"],
                                      "witnesses": [{"vkey": cls.witness.vkey, "class": "customer"}]}, 0o644)
         store = os.path.join(cls.dir, "data", "store")
-        cls.hook_tkb, cls.mail_tkb, cls.found_tkb, cls.bad = (os.path.join(cls.dir, n) for n in (
-            "hook.tkb", "mail.tkb", "findings.tkb", "bad.tkb"))
+        cls.hook_tkb, cls.mail_tkb, cls.found_tkb, cls.alone_tkb, cls.bad = (os.path.join(cls.dir, n) for n in (
+            "hook.tkb", "mail.tkb", "findings.tkb", "findings-alone.tkb", "bad.tkb"))
         cls.session = cls.claude_code_session()
         export_final(store, cls.session, cls.witness, cls.hook_tkb)
         cls.mail = cls.why_run()
         export_final(store, cls.mail, cls.witness, cls.mail_tkb)
-        cls.findings = cls.findings_run()
-        export_final(store, cls.findings, cls.witness, cls.found_tkb)
+        cls.findings, replays = cls.findings_run()
+        export_final(store, cls.findings, cls.witness, cls.alone_tkb)   # without its replay runs: not counted
+        reader = FileReader(store)   # as `tracekit export --v2 --run MAIL --with-findings`
+        export(reader, "default", cls.mail, reader.checkpoint_latest()[1], cls.found_tkb,
+               with_runs=[cls.findings, *replays])
         rewrite_bundle(cls.mail_tkb, cls.bad, lambda fs, manifest: fs.update(   # the denied call rewritten as allowed
             {n: fs[n].replace(b'"decision":"deny"', b'"decision":"allow"', 1) for n in fs if n.startswith("runs/")}))
         cls.graphify = os.path.join(cls.dir, "graphify-out", "graph.json")
@@ -820,22 +830,32 @@ class EndToEnd(unittest.TestCase):
     @classmethod
     def findings_run(cls):
         """A findings run about the why run: a signed finding citing the mail's decision, and a why test that found
-        the page causal for the mail."""
+        the page causal for the mail, from four replay runs whose model calls the gateway recorded (the control arms
+        asked for send_email, the ablated ones did not). (the findings run's id, its replay run ids)"""
         recs = import_v2.bundle_records(cls.mail_tkb, cls.trust)[0][cls.mail]
         mail = next(r for r in recs if r["event"]["type"] == "policy.decision"
                     and r["event"]["data"]["tool"] == "send_email")
-        ids = [uuid.uuid4().hex for _ in range(3)]
+        investigation, arms = uuid.uuid4().hex, []
+        for arm, hit in (("control", True), ("control", True), ("ablated", False), ("ablated", False)):
+            with cls.client.run({"name": "tracekit-why", "version": "test"}, replay_of=cls.mail,
+                                investigation=investigation) as rr:
+                for seq, phase in enumerate(("request", "response")):
+                    cls.service.call(GATEWAY, "model_event", {
+                        "request_id": uuid.uuid4().hex, "run_id": rr.run_id, "run_token": rr.run_token, "stream": "g",
+                        "client_seq": seq, "provider": "openai", "model": "m", "phase": phase, "exchange_id": "x",
+                        "caller": service._dev_identity(), **({"tool_uses": [{
+                            "id": "t1", "name": "send_email", "executed_by": "client", "args_source": "parsed",
+                            "args_digest": "sha256:" + "0" * 64}]} if hit and phase == "response" else {})})
+            arms.append({"run_id": rr.run_id, "arm": arm, "hit": hit})
         with cls.client.run({"name": "tracekit-analyze", "version": "test"}, analyzes=cls.mail) as fr:
             fr.review_finding("tracekit-analyze/test", {"kind": "finding", "rule": "TK-X202", "severity": "medium"},
                               [{"run_seq": mail["event"]["run_seq"], "hash": mail["hash"]}])
             fr.call("why_finding", finding={
-                "target": "tool=send_email", "intervention": "input:web:page", "n": 1, "p_with": 1.0,
-                "p_without": 0.0, "effect": 1.0, "interval": [0.2, 1.0], "verdict": "causal",
-                "replay_runs": [{"run_id": ids[0], "arm": "control", "hit": True},
-                                {"run_id": ids[1], "arm": "ablated", "hit": False}],
-                "models": ["m"], "rung": 1, "off_tape": 0, "investigation": ids[2], "looks": 1, "family": 1,
+                "target": "tool=send_email", "intervention": "input:web:page", "n": 2, "p_with": 1.0,
+                "p_without": 0.0, "effect": 1.0, "interval": [0.07, 1.0], "verdict": "causal", "replay_runs": arms,
+                "models": ["m"], "rung": 1, "off_tape": 0, "investigation": investigation, "looks": 1, "family": 1,
                 "min_effect": 0.1, "applied": True, "stopped": "decisive"})
-        return fr.run_id
+        return fr.run_id, [a["run_id"] for a in arms]
 
     @classmethod
     def tearDownClass(cls):
@@ -926,6 +946,23 @@ class EndToEnd(unittest.TestCase):
         code = {e["dst"] for e in self.edges(src="file:" + self.billing, kind="contains", grade="INFERRED")}
         self.assertEqual(code, {"code:billing_total", "code:billing"})   # src/pager.py is no file of the graph
 
+    def test_a_why_test_is_drawn_only_as_the_verifier_counts_it(self):
+        """The findings bundle alone verifies, with the warning that its why test is not counted (its replay runs are
+        not in it): no causal edge, and the finding says so. With its replay runs, the edge carries its author."""
+        mail, page = self.call(self.mail, "send_email"), self.page()
+        alone = graph.build([self.mail_tkb, self.alone_tkb], self.trust)
+        self.assertEqual([s["verify"]["ok"] for s in alone["sources"]], [True, True])
+        self.assertFalse(self.edges(alone, kind="causal (tested)"))
+        [test] = [n for n in alone["nodes"] if n["label"].startswith("why test:")]
+        self.assertEqual((test["label"].endswith(": causal (not counted)"), "author" in test), (True, False))
+        counted = graph.build([self.mail_tkb, self.found_tkb], self.trust)
+        [edge] = self.edges(counted, kind="causal (tested)")
+        # the dev signer's user wrote the test about its own run
+        self.assertEqual((edge["src"], edge["dst"], edge["grade"], edge["author"]),
+                         (page, mail, "INFERRED", "self-asserted"))
+        [test] = [n for n in counted["nodes"] if n["label"].startswith("why test:")]
+        self.assertEqual((test["label"].endswith(": causal (self-asserted)"), test["author"]), (True, "self-asserted"))
+
     def test_a_tampered_bundle_is_unverified_never_dropped(self):
         self.assertIn("UNVERIFIED (failed verification): bad.tkb", self.said)
         bad = next(s for s in self.doc["sources"] if s["name"] == "bad.tkb")
@@ -1012,7 +1049,7 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(list(sec), ["read_first", "files", "sensitive", "hosts", "approvals", "secrets", "findings",
                                      "chains"])
         self.assertEqual({k: data["summary"][k] for k in ("sources", "failed", "runs")}, {"sources": 4, "failed": 1,
-                                                                                          "runs": 3})
+                                                                                          "runs": 7})   # 4 replays
         failed = sec["read_first"][0]
         self.assertEqual((failed["what"], failed["source"]), ("source failed verification", "bad.tkb"))
         self.assertTrue(failed["failures"])
@@ -1091,7 +1128,7 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("web:page -argument to \\(email\\), untrusted \\(SIGNED\\)-\\> send\\_email \\(flag\\)", chain)
         self.assertNotIn("asked to write", chain)
         self.assertIn(f"run {self.findings} analyses run {self.mail} \\(SIGNED\\)", sec[titles[7]])
-        self.assertIn("4 sources \\(1 failed verification\\), 3 runs, ", self.report)
+        self.assertIn("4 sources \\(1 failed verification\\), 7 runs, ", self.report)
 
     def test_the_same_sources_give_the_same_files_and_verify_rebuilds_them(self):
         two = os.path.join(self.dir, "g2")
@@ -1153,6 +1190,39 @@ class EndToEnd(unittest.TestCase):
             f.write("\n")
         self.assertIn("the trust config is not the one graph.json was built with",
                       graph.verify(self.out, other, graph.vault(), self.sources, self.graphify))
+
+    def test_no_output_holds_a_digest_of_a_calls_arguments(self):
+        """With --content, a call decided twice with the same arguments, the first never run: build points the ask at
+        the later outcome, which hides it, and no output holds the SHA-256 of any call's decided arguments (unsalted,
+        it would test guesses of what the bundle's salted commitment hides)."""
+        args = {"file_path": os.path.join(self.repo, "config", "billing.toml"), "content": "stripe_mode = live\n"}
+        with self.client.run("coder") as r:
+            r.decide("w1", "Write", args)
+            r.decide("w1", "Write", args)   # a retry: the first decision never ran
+            r.complete("w1")
+        retry, out = os.path.join(self.dir, "retry.tkb"), os.path.join(self.dir, "g-retry")
+        export_final(os.path.join(self.dir, "data", "store"), r.run_id, self.witness, retry)
+        sources = [retry, *self.sources]
+        self.assertEqual(run("build", *sources, "--trust", self.trust, "--content", "--graphify", "", "-o", out)[0], 0)
+        digests, vault = set(), graph.vault()
+        for b in sources[:-1]:   # every verified source, whose calls' arguments build read
+            for rid, recs in import_v2.bundle_records(b, self.trust)[0].items():
+                digests |= {hashlib.sha256(json.dumps(a, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+                                           .encode()).hexdigest() for a in vault(rid, recs).values()}
+        self.assertIn(hashlib.sha256(json.dumps(args, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+                      digests)
+        for name in graph.FILES:
+            with open(os.path.join(out, name)) as f:
+                text = f.read()
+            self.assertEqual([d for d in digests if d in text], [], name)
+        with open(os.path.join(out, graph.GRAPH)) as f:
+            doc = json.load(f)
+        call, target = f"call:{r.run_id}:w1", "file:" + args["file_path"]
+        [asked] = self.edges(doc, src=call, dst=target, kind="asked to write")
+        [ran] = self.edges(doc, src=call, dst=target, kind="reported writing")
+        self.assertEqual(asked["superseded_by"], ran["record"])
+        self.assertEqual([e["kind"] for x in graph.matching(doc, "file", "billing.toml")["runs"] for e in x["matched"]],
+                         ["reported writing"])
 
     def test_without_content_the_report_says_what_was_not_read(self):
         doc = graph.build([self.hook_tkb], self.trust)
