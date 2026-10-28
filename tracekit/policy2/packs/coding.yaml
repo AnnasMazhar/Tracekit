@@ -339,15 +339,17 @@ ask:
     # client never share one, and the whole line does. The stage before the pipe must itself be the flush: echo (with
     # up to four flags) or printf, printing exactly FLUSHALL or FLUSHDB (or with ASYNC/SYNC, or a trailing newline),
     # also in a subshell or a { } group, optionally through tee stages that pass stdin through. A herestring must be
-    # exactly the flush; a heredoc holds it as a line of its own in its first nine (where the heredoc ends isn't read).
-    # Only options (each with at most one value) may come between the client and its herestring or heredoc, so a
-    # command that takes stdin as a value (`redis-cli -x SET k <<< FLUSHALL`) isn't held. Up to two of command,
-    # builtin and env, and a directory, may come before echo, printf and the client. A flush word that merely appears
-    # in the piped text (a grep hit, a sentence, a file piped in with cat) is not held: the rule is anchored on the
-    # client invocation, not on the keyword. A flush after the pipe, a pipe into another program, printf with a
-    # separate format string, env with options or assignments, or redis-cli through another wrapper isn't read. The
-    # directory before a name is bounded, so the fallback engine stays linear
-    pattern: '(^|[|;&({]\s*)((command|builtin|env)\s+){0,2}([^\s|;&(){}]{0,256}/)?((echo(\s+-[a-zA-Z]+){0,4}\s+|printf\s+)\W{0,1}([Ff][Ll][Uu][Ss][Hh][Aa][Ll][Ll]|[Ff][Ll][Uu][Ss][Hh][Dd][Bb])(\s+([Aa][Ss][Yy][Nn][Cc]|[Ss][Yy][Nn][Cc]))?((\\r)?\\n)?\W{0,1}(\s*[;)}]){0,4}\s*(?:\|\s*tee\b[^|]*){0,4}\|\s*((command|env)\s+){0,2}([^\s|;&(){}]{0,256}/)?(redis-cli|valkey-cli)\b|(redis-cli|valkey-cli)(\s+-[^\s|;&()<>]*(\s+[^-\s|;&()<>][^\s|;&()<>]*)?){0,16}\s*(<<<\s*(\$?[''"])?([Ff][Ll][Uu][Ss][Hh][Aa][Ll][Ll]|[Ff][Ll][Uu][Ss][Hh][Dd][Bb])(\s+([Aa][Ss][Yy][Nn][Cc]|[Ss][Yy][Nn][Cc]))?((\\r)?\\n)?[''"]?[ \t]*($|[\n|;&)}])|<<-?[ \t]*[''"\\]?[A-Za-z_][^\n]*\n([^\n]*\n){0,8}?[ \t]*([Ff][Ll][Uu][Ss][Hh][Aa][Ll][Ll]|[Ff][Ll][Uu][Ss][Hh][Dd][Bb])([ \t]+([Aa][Ss][Yy][Nn][Cc]|[Ss][Yy][Nn][Cc]))?[ \t]*(\n|$)))'
+    # exactly the flush; a heredoc holds it as a line of its own in its first nine (where the heredoc ends isn't read),
+    # its delimiter quoted any way, also as `bash -c` re-quotes it (<<'"'"'EOF'"'"'). The client fed one may follow
+    # any word (a wrapper: `timeout 5 redis-cli <<< FLUSHALL`, `bash -c 'redis-cli <<EOF …'`, whose line holds the
+    # heredoc). Only options (each with at most one value) may come between the client and its herestring or
+    # heredoc, so a command that takes stdin as a value (`redis-cli -x SET k <<< FLUSHALL`) isn't held. Up to two of
+    # command, builtin and env, and a directory, may come before echo, printf and the piped-into client. A flush word
+    # that merely appears in the piped text (a grep hit, a sentence, a file piped in with cat) is not held: the rule is
+    # anchored on the client invocation, not on the keyword. A flush after the pipe, a pipe into another program,
+    # printf with a separate format string, env with options or assignments, or a pipe into redis-cli through another
+    # wrapper isn't read. The directory before a name is bounded, so the fallback engine stays linear
+    pattern: '(^|[|;&({]\s*)((command|builtin|env)\s+){0,2}([^\s|;&(){}]{0,256}/)?((echo(\s+-[a-zA-Z]+){0,4}\s+|printf\s+)\W{0,1}([Ff][Ll][Uu][Ss][Hh][Aa][Ll][Ll]|[Ff][Ll][Uu][Ss][Hh][Dd][Bb])(\s+([Aa][Ss][Yy][Nn][Cc]|[Ss][Yy][Nn][Cc]))?((\\r)?\\n)?\W{0,1}(\s*[;)}]){0,4}\s*(?:\|\s*tee\b[^|]*){0,4}\|\s*((command|env)\s+){0,2}([^\s|;&(){}]{0,256}/)?(redis-cli|valkey-cli)\b)|(^|[\s|;&({''"])([^\s|;&(){}''"]{0,256}/)?(redis-cli|valkey-cli)(\s+-[^\s|;&()<>]*(\s+[^-\s|;&()<>][^\s|;&()<>]*)?){0,16}\s*(<<<\s*(\$?[''"])?([Ff][Ll][Uu][Ss][Hh][Aa][Ll][Ll]|[Ff][Ll][Uu][Ss][Hh][Dd][Bb])(\s+([Aa][Ss][Yy][Nn][Cc]|[Ss][Yy][Nn][Cc]))?((\\r)?\\n)?[''"]?[ \t]*($|[\n|;&)}])|<<-?[ \t]*[''"\\]{0,8}[A-Za-z_][^\n]{0,256}\n([^\n]*\n){0,8}?[ \t]*([Ff][Ll][Uu][Ss][Hh][Aa][Ll][Ll]|[Ff][Ll][Uu][Ss][Hh][Dd][Bb])([ \t]+([Aa][Ss][Yy][Nn][Cc]|[Ss][Yy][Nn][Cc]))?[ \t]*(\n|$))'
     reason: flushing a cache with a command fed into redis-cli
     remedy: Wait for a person to approve the held call, or flush only the keys the change needs.
     rationale: FLUSHALL and FLUSHDB piped or fed into redis-cli empty the whole cache or database; a person confirms it.

@@ -363,6 +363,9 @@ class CodingPack(unittest.TestCase):
             "redis-cli -h cache.internal -n 2 <<< 'FLUSHDB ASYNC'",
             "redis-cli <<< $'FLUSHALL\\n'",
             "redis-cli -h cache.internal <<'EOF'\nSELECT 2\nFLUSHDB\nEOF",
+            # a client fed the flush through a wrapper or bash -c, which re-quotes the heredoc's delimiter
+            "timeout 5 redis-cli -h cache.internal <<< FLUSHALL",
+            "bash -c 'redis-cli -h cache.internal <<'\"'\"'EOF'\"'\"'\nSELECT 2\nFLUSHDB\nEOF'",
             'psql -c "SELECT 1;\\nDROP TABLE users"',
             'psql -e -c "BEGIN; DELETE FROM users; ROLLBACK;"',
             # the \G gap: mysql/mariadb end the statement at \G, so the ROLLBACK never undoes the DELETE
