@@ -307,7 +307,8 @@ def _pre(client, p, sid, tid):
               file=sys.stderr)
         return 2
     if d["decision"] == "ask":
-        why = f": {d['reason'].removesuffix('.')}" if d.get("reason") else ""   # a live constraint's says which and what to do
+        reason = d.get("reason") or ""   # a live constraint's says which and what to do
+        why = f": {reason if reason.endswith('..') else reason.removesuffix('.')}" if reason else ""   # keeps a ...
         try:
             cap()
             aid = run.call("approval_request", tool_call_id=tid)["approval_id"]

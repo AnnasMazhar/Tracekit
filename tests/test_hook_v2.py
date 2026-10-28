@@ -1130,6 +1130,12 @@ class HoldLine(unittest.TestCase):
         self.assertNotIn(".;", waiting)
         self.assertIn("(TK-A003: force push. Push without --force) and not approved:", not_approved)
 
+    def test_hold_line_keeps_an_ellipsis_whole(self):
+        """A person's own rule may end its reason with `...`: dropping one period would print `..`."""
+        waiting, not_approved = self.hold_lines("Hold for review...")
+        self.assertIn("(TK-A003): Hold for review...; a person approves it", waiting)
+        self.assertIn("(TK-A003: Hold for review...) and not approved:", not_approved)
+
 
 class PreBudget(unittest.TestCase):
     def test_a_held_call_is_answered_within_the_hooks_budget(self):
