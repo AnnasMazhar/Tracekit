@@ -102,9 +102,10 @@ def read(d, name):
 
 def _create(d, name, data, mode, uid, gid):
     path, at = _at(d, name)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW | _CLOEXEC | _BINARY, mode, **at)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW | _CLOEXEC | _BINARY,
+                 0o666 if mode is None else mode, **at)
     try:
-        if hasattr(os, "fchmod"):
+        if mode is not None and hasattr(os, "fchmod"):
             os.fchmod(fd, mode)  # the umask can only narrow the creation mode; this makes it exact
         if uid is not None and hasattr(os, "fchown"):
             os.fchown(fd, uid, -1 if gid is None else gid)
@@ -123,7 +124,8 @@ def _create(d, name, data, mode, uid, gid):
 
 
 def write(d, name, data, mode=0o600, uid=None, gid=None):
-    """Atomically replace file `name` in d with data. Refuses if `name` is a symlink or not a regular file."""
+    """Atomically replace file `name` in d with data. Refuses if `name` is a symlink or not a regular file.
+    mode None: 0o666 as the umask leaves it, the mode open() gives a new file."""
     path, at = _at(d, name)
     try:
         if not stat.S_ISREG(os.stat(path, follow_symlinks=False, **at).st_mode):

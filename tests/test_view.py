@@ -1464,7 +1464,7 @@ class OneViewer(unittest.TestCase):
         self.assertEqual(self.get(port, "/runs", {})[0], 401)
 
     def test_observe_and_why_serve_say_they_are_part_of_view_and_keep_working(self):
-        with mock.patch.object(observe, "Feed"), mock.patch.object(observe, "ThreadingHTTPServer") as httpd, \
+        with mock.patch.object(observe, "Feed"), mock.patch.object(observe, "server") as httpd, \
                 contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()):
             httpd.return_value.serve_forever.side_effect = KeyboardInterrupt
             httpd.return_value.server_address = ("127.0.0.1", 7777)

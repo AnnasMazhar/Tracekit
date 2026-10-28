@@ -26,12 +26,12 @@ import sys
 import threading
 import time
 import traceback
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .core import event_hash, read_text
 from .ledger import read_records, verify_record_sig
-from .netserver import drain
+from .netserver import MAX_STREAMS, MAX_THREADS, Lines, Server, body_length, drain, read_body
 from .replay import CSP_META
 from .storage.base import StorageCorrupt, StorageUnavailable
 from .why.core import ts_seconds
@@ -418,7 +418,7 @@ def make_handler(feed, token, allowed_hosts=None, secure=False, login=None, appr
         return '<nav class="nav">' + "".join(f'<a href="{p}" class="{"on" if p == here else ""}">{names[p]}</a>'
                                              for p in pages) + "</nav>"
 
-    class Handler(BaseHTTPRequestHandler):
+    class Handler(Lines, BaseHTTPRequestHandler):
         server_version = "tracekit-observe"
         session_key = secrets.token_bytes(32)   # this server's: its session cookies die with it
 
@@ -612,15 +612,17 @@ def make_handler(feed, token, allowed_hosts=None, secure=False, login=None, appr
             return self._send(code, json.dumps(out, ensure_ascii=False))
 
         def _body(self, limit):
-            """The request's JSON object, else None once the refusal is sent."""
-            try:
-                n = int(self.headers.get("Content-Length", ""))
-            except ValueError:
+            """The request's JSON object, else None once the refusal is sent (or the body was cut short)."""
+            n, why = body_length(self.headers)
+            if why or n is None:
                 return self._send(411, '{"error":"needs a Content-Length"}')
-            if not 0 <= n <= limit:
+            if n > limit:
                 return self._send(413, '{"error":"body too large"}')
+            body = read_body(self, n)
+            if body is None:
+                return None
             try:
-                body = json.loads(self.rfile.read(n))
+                body = json.loads(body)
             except (UnicodeDecodeError, ValueError, RecursionError):   # RecursionError: nested too deep to parse
                 body = None
             return body if isinstance(body, dict) else self._send(400, '{"error":"the body is not a JSON object"}')
@@ -671,7 +673,7 @@ def make_handler(feed, token, allowed_hosts=None, secure=False, login=None, appr
             return self._why(lambda: why.test(run_id, body) if m.group(2) == "tests" else why.attribute(run_id, body))
 
         def long_request(self):
-            """A request that outlives the server's deadline (an event stream, a replay): view.server lifts it."""
+            """A request that outlives the server's deadline (an event stream, a replay): bounded() lifts it."""
 
         def finish(self):
             super().finish()
@@ -693,7 +695,7 @@ def make_handler(feed, token, allowed_hosts=None, secure=False, login=None, appr
                 self._send(404, '{"error":"not found"}')
 
         def stream_slot(self):
-            """Whether this connection may become an event stream: view.server counts streams on their own."""
+            """Whether this connection may become an event stream: bounded() counts streams on their own."""
             return True
 
         def stream(self, i, scope=ALL):
@@ -722,6 +724,24 @@ def make_handler(feed, token, allowed_hosts=None, secure=False, login=None, appr
             except OSError:  # client went away (broken pipe, reset, timeout)
                 return
     return Handler
+
+
+def bounded(handler):
+    """`handler`, a make_handler class, for a netserver.Server: event streams count against its stream limits."""
+    class Bounded(handler):
+        def long_request(self):
+            self.server.stop_deadline()   # an event stream lasts as long as the page is open, a replay its trials
+
+        def stream_slot(self):
+            return self.server.to_stream(self.client_address[0])
+    return Bounded
+
+
+def server(feed, host, port, token):
+    """`tracekit observe`'s server, on loopback only: every client has the one address, so its limits are the overall
+    ones."""
+    return Server((host, port), bounded(make_handler(feed, token, [host])), max_per_ip=MAX_THREADS,
+                  max_streams_per_ip=MAX_STREAMS)
 
 
 def _open_bundle(bundle_path, prog="tracekit observe"):
@@ -805,11 +825,10 @@ def main(argv=None):
     print(NOTICE, file=sys.stderr, flush=True)
     feed = Feed(path, prices=prices, source="bundle" if a.bundle else None)
     try:
-        srv = ThreadingHTTPServer((a.host, a.port), make_handler(feed, token, [a.host]))
+        srv = server(feed, a.host, a.port, token)
     except OSError as e:
         print(f"tracekit observe: cannot listen on {a.host}:{a.port} ({e.strerror or e}); try --port", file=sys.stderr)
         return 1
-    srv.daemon_threads = True
     print(f"tracekit observe on http://{a.host}:{srv.server_address[1]}  (ledger: {path}, read-only)", flush=True)
     try:
         srv.serve_forever()
