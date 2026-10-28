@@ -393,10 +393,15 @@ def _midline(prompt, start):
     return start > 0 and prompt[start - 1] != "\n"
 
 
+def _handoff(prompt, source, start):
+    """Whether the part at `start` is Claude Code's ultraplan handoff, whose tag continues its own sentence."""
+    return source == "ultraplan" and prompt[:start].lower().endswith("remote agent content enclosed in ")
+
+
 def _states(prompt, source, value, start):
     """The live constraints (_live) a part of prompt_parts(prompt) states, read without its tags; none for an ultraplan
-    handoff that continues its own sentence."""
-    if source == "ultraplan" and prompt[:start].lower().endswith("remote agent content enclosed in "):
+    handoff (_handoff)."""
+    if _handoff(prompt, source, start):
         return []
     return _live(re.sub(r"<[^<>]*>", "", value[:constraints.MAX_TEXT]))
 
@@ -518,7 +523,8 @@ def prompt_parts(prompt, agent=None):
             source = "non-user-message"
         else:
             source = "scheduled-task" if match.group(0).lower().startswith("[scheduled") else "system-notification"
-        if not rest and _midline(prompt, start):   # a name the person typed: harness text after it starts a line
+        if not rest and _midline(prompt, start) and not _handoff(prompt, source, start):   # a name the person typed:
+            # harness text after it starts a line
             pos = next((m.start() for m in wrapped.finditer(prompt, match.end()) if not _midline(prompt, m.start())),
                        None)
             if pos is not None:
