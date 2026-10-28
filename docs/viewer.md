@@ -30,8 +30,9 @@ The header holds the pages, the command box, and on a run's page that run's view
 A run's page shows the run's agents (the run that started it and every run started from there, each with its calls,
 held, blocked and flagged counts) and tool mix on the left, one of its views in the middle and the inspector (DETAIL,
 WHY, NODE) on the right, under a header with the run's verdict, counts and the **EXPORT** and **VERIFY** commands. Its
-views, keys `1` to `7`: **OVERVIEW**, **CALLS** (the run's tape), **TIMELINE** (one lane per agent), **GRAPH**,
-**WHY**, **AGENTS** and **EVIDENCE** (the run's review and the viewer's verifier report). OVERVIEW, GRAPH, WHY and
+views, keys `1` to `7`: **OVERVIEW**, **CALLS** (the run's tape), **TIMELINE** (by call on one time axis, or one lane per agent), **GRAPH**,
+**WHY**, **AGENTS** and **EVIDENCE** (the run's signed records in order, the viewer's checks and their result, and
+the export and verify commands; [below](#a-runs-timeline-evidence-and-the-inspector)). OVERVIEW, GRAPH, WHY and
 AGENTS need the run's why log, which the viewer builds for each verified run.
 
 **NEEDS YOU**, under the stats strip, lists across every run what needs a person, first the calls waiting (oldest
@@ -232,7 +233,7 @@ left to right in run order; each node carries its signed decision: **DENIED** (r
 reason, who approved, and the record it cites. A run's arguments are only a salted commitment, so WHY can list the
 path but not replay it. With ACTUAL SIZE a flowchart wider than its panel scrolls sideways (`scroll →` in the
 panel's title), and a clicked node is scrolled into view. A held call's node says how its approval ended
-(**APPROVED**, **REJECTED**, **EXPIRED**). The why views follow the run selected in panel 1; a run that failed
+(**APPROVED**, **REJECTED**, **EXPIRED**). The why views follow the run whose page is open; a run that failed
 verification has no graph, and GRAPH says why.
 
 ### AGENTS
@@ -271,7 +272,7 @@ tracekit view: bundle docs/sample/demo-run-tampered.tkb FAILED verification (exi
 `tracekit view [--dev | --config signer.yaml | --data-dir DIR]` reads one signer's store, read-only, and verifies each
 run with the code `tracekit verify` runs. The page is the observer's terminal, for runs:
 
-- **Runs** (panel 1): each run with its agent's registered name, the verifier's verdict (`VERIFIED`, `FAILED`, or
+- **Runs** (on DESK, and the RUNS page): each run with its agent's registered name, the verifier's verdict (`VERIFIED`, `FAILED`, or
   `PENDING` until a checkpoint covers the run's last record; every verdict is operator-side, see below), start time,
   duration, and its calls, blocked, held and gaps. Clicking a run scopes the tape, timeline, tool mix and header to it;
   **All runs** restores the full view. A run that fails shows only its verifier report.
@@ -345,11 +346,11 @@ that citation joins the two.
   observed path through agents, model calls and messages, from each of the 20 nearest untrusted inputs), **candidate causes** with their
   status (primary cause, contributing, confirmed, joint, inconclusive, no effect seen, ruled out, not tested), effect,
   95% interval and with → without rates, and **FIND THE CAUSE** / **RUN TEST**.
-- **Views** (header buttons; the run list and tape stay): **RUNS**, **OVERVIEW**, **TIMELINE** and **WHY DID IT HAPPEN?**
-  (as below), **GRAPH**, the run's data flow (observed edges; tested causes
+- **Views** (a run's page, keys `1` to `7`; the tape's **WHY LOG EVENTS**; the **INFLUENCE** page): **OVERVIEW**,
+  **WHY** and the why log's **TIMELINE** (as below), **GRAPH**, the run's data flow (observed edges; tested causes
   in red; inferred links and ruled-out tests hidden until ticked; click a node for what it came from and led to),
   **AGENTS** (the channels used, the influence matrix, the critical path), **INFLUENCE** (across runs: sources ×
-  tools, with tested effects). **DESK** returns to the panels.
+  tools, with tested effects). **DESK** shows every panel at once.
 - **Alerts**: the why alerts (a sensitive call using a value only untrusted content supplied, a call downstream of
   untrusted input, evidence alerts) join the alert panel labelled `WHY`; signed records' alerts are labelled `SIGNED`.
 
