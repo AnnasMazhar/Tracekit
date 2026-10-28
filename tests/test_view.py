@@ -573,7 +573,30 @@ class View(unittest.TestCase):
             row = self.report(feed, run_id)[-1]
             self.assertEqual((row["review"]["verdict"], row["title"]), ("failed", f"RUN {run_id} · Integrity FAILED"))
             self.assertIn("a record of the run can't be read", row["text"])   # the report's failing check
+            self.assertNotIn("the store was edited", row["text"])   # a code error reads the same: not called tamper
             self.assertEqual([r for r in self.rows(feed, run_id) if not r.get("analysis")], [])
+
+    def test_rows_whose_temp_file_fails_leave_no_reader_open(self):
+        """/api/rows opened a reader of the store, then made its temp file: when that failed (a full disk, no file
+        descriptors) the reader was never closed, a Postgres connection left open."""
+        run_id = self.finished_run()
+        feed = store_feed(self, {"data_dir": self.d})
+        self.report(feed, run_id)
+        opened, closed, me, real = [], [], threading.get_ident(), view.reader
+
+        def reader(cfg):   # this thread's readers only: the watcher's own are its business
+            r = real(cfg)
+            if threading.get_ident() == me:
+                opened.append(r)
+                close = r.close
+                r.close = lambda: (closed.append(r), close())
+            return r
+        with mock.patch.object(view, "reader", side_effect=reader), \
+                mock.patch.object(view.tempfile, "mkstemp", side_effect=OSError(24, "Too many open files")):
+            with self.assertRaises(OSError):
+                feed.rows(observe.ALL, "default", run_id)
+        self.assertEqual(len(opened), len(closed))
+        self.assertTrue(feed.verifying.acquire(blocking=False) and feed.verifying.acquire(blocking=False))
 
     def test_rows_of_a_record_export_cannot_read_are_refused_not_a_dropped_connection(self):
         """A record edited into a shape export doesn't expect (no data, data a number, type a list) raised KeyError or

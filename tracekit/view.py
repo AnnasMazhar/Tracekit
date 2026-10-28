@@ -1168,25 +1168,28 @@ class StoreFeed:
         if not self.verifying.acquire(blocking=False):
             raise observe.Busy()
         try:
-            r = reader(self.cfg)
             fd, out = tempfile.mkstemp(suffix=".tkb", dir=self.tmp)   # requests run concurrently: a file each
             os.close(fd)
             try:
-                note = r.checkpoint_latest()
-                if note and note[0] > r.tree.size:   # a checkpoint written while it opened: read again, as refresh() does
-                    r.close()
-                    r = reader(self.cfg)
-                run = r.runs.get((tenant, run_id))
-                count = bisect.bisect_left(run["seqs"], note[0]) if run and note else 0
-                if not count:
+                r = reader(self.cfg)
+                try:
+                    note = r.checkpoint_latest()
+                    # a checkpoint written while it opened: read again, as refresh() does
+                    if note and note[0] > r.tree.size:
+                        r.close()
+                        r = reader(self.cfg)
+                    run = r.runs.get((tenant, run_id))
+                    count = bisect.bisect_left(run["seqs"], note[0]) if run and note else 0
+                    if not count:
+                        return None
+                    export(r, tenant, run_id, note[1], out)
+                    verified, _, code = bundle_records(out, self.trust, self.memo)   # the watcher's: checked once
+                # the store does not match its own checkpoint, or holds a record of a shape export can't read
+                except (ValueError, KeyError, TypeError, AttributeError, IndexError):
                     return None
-                export(r, tenant, run_id, note[1], out)
-                verified, _, code = bundle_records(out, self.trust, self.memo)   # the watcher's: its records checked once
-            # the store does not match its own checkpoint, or holds a record of a shape export can't read: not verified
-            except (ValueError, KeyError, TypeError, AttributeError, IndexError):
-                return None
+                finally:
+                    r.close()
             finally:
-                r.close()
                 os.unlink(out)
         finally:
             self.verifying.release()
@@ -1266,12 +1269,12 @@ def check(reader, tenant, run_id, note, trust, out, memo=None):
         export(reader, tenant, run_id, note, out)
         verified, rep, code = bundle_records(out, trust, memo)
         records = verified.get(run_id, [])
-    # the store does not match its own checkpoint, or holds a record export can't read (an edit): both fail the run
+    # the store does not match its own checkpoint, or holds a record export can't read: either fails the run
     except (ValueError, KeyError, TypeError, AttributeError, IndexError) as e:
         rep, code = v2.Report(), v2.EXIT_FAIL
         rep.integrity, rep.assurance = "FAILED", "none"
         rep.check("export", False, str(e) if isinstance(e, ValueError) else
-                  f"a record of the run can't be read ({type(e).__name__}): the store was edited")
+                  f"a record of the run can't be read ({type(e).__name__})")
     text = io.StringIO()
     v2.print_report(rep, code, text)
     return rep, code, text.getvalue(), records
