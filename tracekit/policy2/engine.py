@@ -445,7 +445,7 @@ def _effects(parsed):
     expansion builds may hold the path)."""
     tags = ["WRITE_TARGET:" + _text(ref) for ref in parsed[3]] + _command_effects(parsed[0])
     unread = any(c["opaque"] for c in parsed[0])
-    if any(_opaque(c) for c in parsed[0]) or unread and _reaches_unread(parsed[0]):
+    if any(_opaque(c) for c in parsed[0]) or unread and _reaches_unread(parsed):
         # lean: a read on the same line as such a writer counts as a write (as TK-D008 read the whole line before
         # #421); follow the names into the writer if that holds real reads
         tags += ["MAY_WRITE:" + w for c in parsed[0] for w in c["argv"][1:] + c["stdin"]]
@@ -458,15 +458,29 @@ _WRITE_WORD = re.compile(r"\b(?:rm|unlink|truncate|shred|mv|tee|dd|ln|sed|perl|f
 _APPLESCRIPT_WRITE = re.compile(r"(?i)do ?shell ?script|\bdelete\b")   # JXA's doShellScript too
 
 
-def _reaches_unread(commands):
-    """Whether a writer's name (or `>`, in a word) reaches a command the parser can't read: in its words, its name as
-    written (`rm${IFS}-rf${IFS}…`), its herestring or heredoc text, or an earlier stage of its pipeline's (`echo 'rm
-    …' | sh`). A redirection elsewhere on the line (`$PAGER x 2>/dev/null`), another command (`find x | xargs -I{} sh
-    -c 'wc -l {}'`) and a heredoc's program text (`$PY - <<EOF` with a `>` in it) don't."""
+_SETS_VARIABLES = shell._VARIABLE_SETTING_BUILTINS | {"set"}
+
+
+def _reaches_unread(parsed):
+    """Whether a writer's name reaches a command the parser can't read: in its words or its name as written
+    (`rm${IFS}-rf${IFS}…`), and in an echo's or printf's words earlier in its pipeline (`echo 'rm …' | sh`), also as
+    `>`, sed or find; in another earlier stage's words or any herestring or heredoc text there, as a writer's name only
+    (`jq 'select(.n > 1)' x | $PAGER` and a `>` in `$PY - <<EOF` aren't); and, when its name is an expansion
+    (`$C -rf x`), in the values the line gives variables (`C=rm`, `read C <<< rm`, `printf -v C rm`, `set -- rm`).
+    A redirection elsewhere on the line (`$PAGER x 2>/dev/null`) and another pipeline's command don't."""
+    commands = parsed[0]
     last = {c["pipeline"]: i for i, c in enumerate(commands) if c["opaque"]}
-    fed = [c for i, c in enumerate(commands) if i <= last.get(c["pipeline"], -1)]
-    return any(_WRITE_WORD.search(w.lower()) for c in fed for w in [c["word"]] * c["opaque"] + c["argv"][1:]) or \
-        any(_WRITER.search(s.lower()) for c in fed for s in c["stdin"])
+    for c in (c for i, c in enumerate(commands) if i <= last.get(c["pipeline"], -1)):
+        words = _WRITE_WORD if c["opaque"] or c["argv"][0] in ("echo", "printf") else _WRITER
+        if any(words.search(w.lower()) for w in [c["word"]] * c["opaque"] + c["argv"][1:]) or \
+                any(_WRITER.search(s.lower()) for s in c["stdin"]):
+            return True
+    if not any(c["opaque"] and re.search(r"[$`]", c["word"]) for c in commands):
+        return False
+    values = [r for r in parsed[2] if shell._ASSIGN.match(r)] + [
+        w for c in commands if c["argv"][0] in _SETS_VARIABLES or c["argv"][0] == "printf" and "-v" in c["argv"]
+        for w in c["argv"][1:] + c["stdin"]]
+    return any(_WRITER.search(v.lower()) for v in values)
 
 
 def _opaque(command):

@@ -642,6 +642,8 @@ class Speed(unittest.TestCase):
         calls += [("Bash", {"command": "mysql -e" + "x" * n}), ("Bash", {"command": "psql -" + "c" * n}),
                   ("Bash", {"command": "mysql -" + "x" * n}), ("Bash", {"command": "psql -" + "x" * n + "c"}),
                   ("Bash", {"command": "psql " + "-xxxxxxxxxx " * (n // 12)}),
+                  ("Bash", {"command": "psql -" + "1" * n + "c"}), ("Bash", {"command": "mysql -" + "c" * n}),
+                  ("Bash", {"command": "mariadb -" + "N" * n + "x"}),
                   ("Bash", {"command": "psql -c 'SELECT 1' -c" + "x" * (n - 24)})]
         calls += [("mcp__db__run", {"rows": [{key: text}] * (n // 16)}) for key in ("sql", "query")
                   for text in ("/*", "-- ", "/* x")]

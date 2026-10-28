@@ -348,6 +348,8 @@ class CodingPack(unittest.TestCase):
             "psql -" + "x" * 10 + "c 'DROP TABLE users'",
             "mysql -" + "N" * 9 + "se 'DROP TABLE users'",
             "mariadb -h db -cxxxxxxxxxe 'DROP TABLE users'",
+            # psql's -0 and -1 take no value either
+            "psql -1c 'DROP TABLE users'", "psql -A1c 'DROP TABLE users'", "psql -" + "1" * 10 + "c 'DROP TABLE users'",
             'docker-compose exec -T db mysql -e "DROP DATABASE app"',
             'kubectl exec -n ns pod -- psql -c "DROP TABLE users"',
             'sqlite3 app.db "DROP TABLE users"',
@@ -396,6 +398,9 @@ class CodingPack(unittest.TestCase):
             'docker compose exec db psql -c "SELECT 1"',
             'psql -AtqXnvsc "SELECT 1"',
             "psql -cCHECKPOINT",
+            # a value attached to an option that takes one isn't a cluster of flags
+            "psql -dmydatabase", "psql -Uapplicationuser -c 'SELECT 1'", "mysql -uroot -pdevelopment -e 'SELECT 1'",
+            "mysql -Dmydatabase", "mysql -hdbservice -e 'SELECT 1'", "psql -hdbservice.internal -c 'SELECT 1'",
             # a lone minus or slash inside an UPDATE is not a comment, and an UPDATE isn't held
             'psql -c "BEGIN; UPDATE t SET x = a/-5; ROLLBACK;"',
             'psql -c "BEGIN; UPDATE t SET x = a/b; ROLLBACK;"',
@@ -708,7 +713,11 @@ class CodingPack(unittest.TestCase):
                    "printf 'rm -rf %s' " + t + " | sh", "echo rm -rf " + t + " | bash", "$X rm -rf " + t,
                    "\"$SHELL\" -c 'rm -rf " + t + "'", "pwsh -c 'Remove-Item " + t + "; rm " + t + "'",
                    "echo 'ls > " + t + "/x.jsonl' | sh", "ls | xargs -I{} sh -c 'rm -rf " + t + "/{}'",
-                   "zip -T -m -r /tmp/x.zip " + t, "zip -rmT /tmp/x.zip " + t)
+                   "zip -T -m -r /tmp/x.zip " + t, "zip -rmT /tmp/x.zip " + t,
+                   # a writer's name given to a variable the unreadable command's name expands
+                   "C=rm; $C -rf " + t, "D=\"rm -rf\"; $D " + t, "c=$(echo rm); $c -rf " + t,
+                   "read C <<< rm; $C -rf " + t, "printf -v C rm; $C -rf " + t, "set -- rm -rf; \"$@\" " + t,
+                   "export C=rm; ${C} -rf " + t)
         kept = ("trap 'rm -rf \"$tmp\"' EXIT", "trap cleanup EXIT", "trap - EXIT", "zip -r out.zip " + t,
                 "zip -rm out.zip build", "at now <<< 'ls " + t + "'", "xargs -n1 echo <<< " + t,
                 "osascript -e 'display notification \"done\"'", "cat " + t + "/p/a.jsonl | xargs echo",
@@ -730,7 +739,10 @@ class CodingPack(unittest.TestCase):
                 + "/*/*.jsonl')):\n    if os.path.getsize(f) > 0: print(f)\nEOF",
                 "zip -r -b/tmp backup.zip " + t, "zip -r -b/tmp/m backup.zip " + t, "zip -s100m -r backup.zip " + t,
                 "zip -Pmmm -r backup.zip " + t, "zip -ds10m -r backup.zip " + t, "zip -n.mp3 -r backup.zip " + t,
-                "zip -r backup.zip " + t + " -x '-m*'", "at -l; ls " + t, "at -r 3; ls " + t)
+                "zip -r backup.zip " + t + " -x '-m*'", "at -l; ls " + t, "at -r 3; ls " + t,
+                # a `>` in a filter's program before an unreadable pager, and a variable set to a reader
+                "jq 'select(.n > 1)' " + t + "/p/a.jsonl | $PAGER", "awk '$3 > 10' " + t + "/p/a.jsonl | $PAGER",
+                "PAGER=less; $PAGER " + t + "/p/a.jsonl")
         for pack, engine, e in self.every_pack():
             for command in deletes:
                 with self.subTest(pack=pack, engine=engine, command=command):
