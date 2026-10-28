@@ -963,7 +963,8 @@ class StoreFeed:
     def _verify(self, reader, note, key, count):
         tenant, run_id = key
         t = time.thread_time()   # its own CPU time: not the time it waited for the mirror thread
-        rep, code, text = check(reader, tenant, run_id, note, self.trust, os.path.join(self.tmp, "run.tkb"), self.memo)
+        rep, code, text, verified = check(reader, tenant, run_id, note, self.trust, os.path.join(self.tmp, "run.tkb"),
+                                          self.memo)
         if len(self.memo) > MEMO_MAX:   # lean: forgets every run's records at once; an LRU if big stores re-check often
             self.memo.clear()
         state = dict(self.runs.get(key) or {"count": 0, "shown": 0, "failed": None}, checked=time.time(),
@@ -987,7 +988,7 @@ class StoreFeed:
             state = dict(state, count=count, shown=0, failed=rep.integrity, analyzed=False)
             records = None   # a mirror of it, from when it verified, goes
         else:
-            records = list(itertools.islice(reader.iter_run(tenant, run_id), count))   # what the checkpoint covers
+            records = verified   # what the checkpoint covers, as verified: not read again from the store
             e["ts"] = records[-1]["event"]["ts"]   # the report sits at the end of what it covers
             want = [r for r in records[state["shown"]:] if self.content and (
                 r["event"]["type"] == "policy.decision" and (r["event"].get("data") or {}).get("args_commitment")
@@ -1247,18 +1248,22 @@ def write_trust(path, vkeys):
 
 
 def check(reader, tenant, run_id, note, trust, out, memo=None):
-    """(report, exit code, printed report) of verify.v2 on the run's bundle, exported from `reader` with `note` to
-    `out`; `memo`: verify.v2's, kept across checks."""
+    """(report, exit code, printed report, records) of verify.v2 on the run's bundle, exported from `reader` with `note`
+    to `out`; `records`: the run's records as verify.v2 read them ([] unless it verifies), so what is shown is what
+    was checked, never a second read of the store; `memo`: verify.v2's, kept across checks."""
+    from .why.import_v2 import bundle_records
+    records = []
     try:
         export(reader, tenant, run_id, note, out)
-        rep, code = v2.verify(out, trust, memo=memo)
+        verified, rep, code = bundle_records(out, trust, memo)
+        records = verified.get(run_id, [])
     except ValueError as e:   # the store does not match its own checkpoint
         rep, code = v2.Report(), v2.EXIT_FAIL
         rep.integrity, rep.assurance = "FAILED", "none"
         rep.check("export", False, str(e))
     text = io.StringIO()
     v2.print_report(rep, code, text)
-    return rep, code, text.getvalue()
+    return rep, code, text.getvalue(), records
 
 
 class Runs:
@@ -1320,7 +1325,7 @@ class Runs:
             fd, out = tempfile.mkstemp(suffix=".tkb", dir=self.tmp)   # requests run concurrently: a file each
             os.close(fd)
             try:
-                rep, code, text = check(r, tenant, run_id, note[1], self.logs[i][1], out)
+                rep, code, text, _ = check(r, tenant, run_id, note[1], self.logs[i][1], out)
             finally:
                 os.unlink(out)
             v = {"verdict": "failed" if code else "verified", "integrity": rep.integrity,

@@ -427,7 +427,8 @@ class View(unittest.TestCase):
             self.assertIs(feed.rows(observe.ALL, "default", run_id), body)   # asked again: checked once
             other = self.finished_run()   # another run moves the log's checkpoint; this run's own records did not grow
             self.assertIs(feed.rows(observe.ALL, "default", run_id), body)
-        self.assertEqual(checked.call_count, 1)
+        # rows()' own checks (the watcher's check of the other run verifies its bundle too, as run.tkb)
+        self.assertEqual(len([c for c in checked.call_args_list if os.path.basename(c.args[0]) != "run.tkb"]), 1)
         rows = json.loads(body)["rows"]
         self.assertEqual([r["tool_use_id"] for r in rows if r["event"] == "PreToolUse"], ["c1", "c2", "c3"])
         self.assertEqual({r["tenant"] for r in rows}, {"default"})
@@ -604,6 +605,33 @@ class View(unittest.TestCase):
                 mock.patch.object(view.v2, "validate", side_effect=validate):
             self.assertIsNotNone(feed.rows(observe.ALL, "default", run_id))
         self.assertEqual(schema, [])
+
+    def test_the_tape_shows_the_records_the_check_verified_not_a_second_read_of_the_store(self):
+        """The watcher read a run again from the store after verify.v2 passed: an edit in place between the two (same
+        length, restored after) reached the tape and the run review under VERIFIED, and every later re-check passed."""
+        run_id = self.finished_run()
+        self.service.close()
+        path = os.path.join(self.d, "store", "records.jsonl")
+        with open(path, "rb") as f:
+            orig = f.read()
+        self.assertEqual(orig.count(b'"decision":"deny"'), 1)
+        real = view.check
+
+        def check_then_edit(reader, tenant, rid, *a, **k):
+            out = real(reader, tenant, rid, *a, **k)
+            if rid == run_id:
+                with open(path, "r+b") as f:
+                    f.write(orig.replace(b'"decision":"deny"', b'"decision":"flag"'))
+            return out
+        with mock.patch.object(view, "check", side_effect=check_then_edit):
+            feed = store_feed(self, {"data_dir": self.d})
+            self.report(feed, run_id)
+        with open(path, "r+b") as f:   # and restored: the store verifies again
+            f.write(orig)
+        rows = self.rows(feed, run_id)
+        self.assertEqual([r["v2"]["decision"] for r in rows if r["event"] == "PreToolUse"], ["allow", "deny", "ask"])
+        self.assertEqual(dict([r for r in rows if r.get("review")][-1]["review"]["decisions"]),
+                         {"allow": 1, "deny": 1, "ask": 1})
 
     def test_with_a_content_source_each_decision_carries_its_arguments(self):
         """The tape named every allowed call "no rule matched": with the dev signer's retained arguments each decision
@@ -819,9 +847,10 @@ class View(unittest.TestCase):
                     "coverage": {"verdict": {"reasoning": {"full": 0, "summary": 0, "withheld": 0, "none": 1},
                                              "checks": {"TK-X201": {"checked": 0, "found": 0, "not_checkable": [
                                                  {"reason": "no_response", "n": 1}]}}}}}
-        verified = (mock.Mock(integrity="VERIFIED", assurance="dev"), 0, "Integrity: VERIFIED.")
+        def verified(reader, tenant, rid, *a):   # the run's records as the check read them
+            return mock.Mock(integrity="VERIFIED", assurance="dev"), 0, "Integrity: VERIFIED.", recs[rid]
         with mock.patch.object(view, "reader", return_value=fake), mock.patch.object(view, "check",
-                                                                                      return_value=verified):
+                                                                                      side_effect=verified):
             feed = store_feed(self, {"data_dir": self.d}, analyze=analyze)
             for rid in recs:
                 feed._verify(fake, "note", ("default", rid), 2)
@@ -848,13 +877,14 @@ class View(unittest.TestCase):
             for i in range(1, 5)] + [v2rec(5, "run.final", {}, "r1")]
         fake = mock.Mock(runs={("default", "r1"): {"seqs": list(range(6))}}, tree=mock.Mock(size=6))
         fake.iter_run.side_effect = lambda tenant, rid: iter(recs)
-        verified = (mock.Mock(integrity="VERIFIED", assurance="dev"), 0, "Integrity: VERIFIED.")
+        def verified(reader, tenant, rid, note, *a):   # what the note covers, as the check read it
+            return mock.Mock(integrity="VERIFIED", assurance="dev"), 0, "Integrity: VERIFIED.", recs[:int(note[-1])]
 
         def rows():
             with feed.lock:
                 return [(r["event"], r.get("tape")) for r in feed.records if r["session_id"] == "r1"]
         with mock.patch.object(view, "reader", return_value=fake), \
-                mock.patch.object(view, "check", return_value=verified) as check, \
+                mock.patch.object(view, "check", side_effect=verified) as check, \
                 mock.patch.object(view, "BACKOFF", 0):   # each refresh() checks the grown run (BACKOFF: its own test)
             fake.checkpoint_latest.return_value = (3, "note at 3")
             feed = store_feed(self, {"data_dir": self.d})
@@ -881,7 +911,7 @@ class View(unittest.TestCase):
             self.assertTrue(wait_for(lambda: feed.records, 5))
         with feed.lock:
             self.assertEqual([r["session_id"] for r in feed.records], ["r9"])   # not listed as a pending agent run
-        with mock.patch.object(view, "check", return_value=(mock.Mock(integrity="FAILED", assurance="none"), 1, "t")):
+        with mock.patch.object(view, "check", return_value=(mock.Mock(integrity="FAILED", assurance="none"), 1, "t", [])):
             feed._verify(fake, "note", signer, 1)
         with feed.lock:
             self.assertEqual((feed.records[-1]["signer"], feed.records[-1]["agent"]), (True, "signer"))
@@ -1663,7 +1693,8 @@ class LiveRuns(unittest.TestCase):
                 return real(reader, tenant, run_id, note, trust, out, memo)
             self.checks.append(run_id)
             self.now[0] += 2   # each check takes 2 s
-            return verdicts(run_id)
+            rep, code, text = verdicts(run_id)
+            return rep, code, text, [] if code else list(self.recs[run_id])   # the records the check read
         p = mock.patch.object(view, "check", side_effect=check)
         p.start()
         self.addCleanup(p.stop)
