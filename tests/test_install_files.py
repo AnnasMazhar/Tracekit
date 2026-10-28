@@ -185,6 +185,31 @@ class HarnessFileWrites(unittest.TestCase):
                     with open(path, "rb") as f:
                         self.assertIn(theme.encode("utf-8"), f.read())
 
+    def test_a_lone_surrogate_in_the_file_still_lets_init_and_uninstall_finish(self):
+        """With UTF-8 kept, a lone surrogate (valid JSON as \\ud83d, which UTF-8 can't encode) made init and uninstall
+        raise, so uninstall left the fail-closed hooks in place."""
+        from tracekit import agent_hooks
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        for harness in ("claude", *(h for h in agent_hooks.HARNESSES if h not in ("goose", "opencode"))):
+            with self.subTest(harness):
+                home = os.path.join(d, harness)
+                path = os.path.join(home, ".claude", "settings.json") if harness == "claude" else \
+                    agent_hooks.config_path(harness, home=home)
+                os.makedirs(os.path.dirname(path))
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write('{"note": "\\ud83d"}\n')
+                for uninstall in (False, True):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        if harness == "claude":
+                            install.install_hooks(path, uninstall=uninstall, module=install.V2_HOOK)
+                        else:
+                            agent_hooks.install(harness, uninstall=uninstall, v2=True, path=path)
+                    with open(path, encoding="utf-8") as f:
+                        text = f.read()
+                    self.assertEqual(json.loads(text)["note"], "\ud83d")
+                    self.assertEqual("tracekit" in text, not uninstall)
+
 
 @unittest.skipUnless(CAN_SYMLINK, "needs symlinks")
 class SignerConfig(_Sentinel, unittest.TestCase):
