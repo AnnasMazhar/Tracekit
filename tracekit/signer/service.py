@@ -385,7 +385,8 @@ _HIDDEN = ("Cc", "Cf", "Zl", "Zp")
 # and Default_Ignorable_Code_Point (Unicode's DerivedCoreProperties.txt; unicodedata doesn't carry it): variation
 # selectors, Hangul fillers and the rest, which a reader doesn't see and a model reads (bytes hidden after a character)
 _IGNORABLE = re.compile("[\u00ad\u034f\u061c\u115f-\u1160\u17b4-\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f"
-                        "\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U000e0000-\U000e0fff]")
+                        "\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufff8]|[\U0001bca0-\U0001bca3]|[\U0001d173-\U0001d17a]"
+                        "|[\U000e0000-\U000e0fff]")
 OTLP_IMPORT = "otlp_import"   # an `authorize` grant, never a default: OTLP/HTTP import (otlp config section)
 ON_BEHALF = "approval_decide_on_behalf"   # an `authorize` grant, never a default: a bridge answers for its people
 OTLP_MAX_SPANS = 512
