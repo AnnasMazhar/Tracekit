@@ -79,7 +79,7 @@ MAX_REFERENCE_TASK_IDS = 64
 
 
 class _Tasks:
-    """The bounded task ids each authenticated caller created through this gateway."""
+    """The bounded task and context ids each authenticated caller was given through this gateway."""
 
     def __init__(self):
         self.callers, self.lock = collections.OrderedDict(), threading.Lock()
@@ -107,30 +107,33 @@ class _Tasks:
                 self.callers.popitem(last=False)
 
 
+def _fields(obj, name):
+    """The values dict `obj` holds for field `name` in every spelling an A2A server may read it by: a2a-python reads
+    the snake_case name too, and a JSON decoder may match names in any case (Go's encoding/json does)."""
+    fold = name.casefold()
+    return [v for k, v in obj.items() if k.replace("_", "").casefold() == fold] if isinstance(obj, dict) else []
+
+
 def _task_refs(method, params):
-    """The existing tasks a request reads or continues, if it names them."""
+    """The existing tasks and contexts a request reads or continues, if it names them."""
     if method == "tasks/get":
-        if "id" not in params:
-            return ()
-        if not _task_id(params["id"]):
+        refs = _fields(params, "id")
+        if not all(map(_task_id, refs)):
             raise ValueError("tasks/get id is a non-empty string of at most %d characters" % MAX_TASK_ID)
-        return (params["id"],)
-    message = params.get("message")
-    if not isinstance(message, dict):
-        return ()
+        return tuple(refs)
     refs = []
-    for field in ("taskId", "contextId"):
-        if field in message:
-            if not _task_id(message[field]):
-                raise ValueError(f"message {field} is a non-empty string of at most {MAX_TASK_ID} characters")
-            refs.append(message[field])
-    if "referenceTaskIds" in message:
-        values = message["referenceTaskIds"]
-        if not isinstance(values, list) or len(values) > MAX_REFERENCE_TASK_IDS or \
-                any(not _task_id(value) for value in values) or len(set(values)) != len(values):
-            raise ValueError("message referenceTaskIds is a list of at most %d unique non-empty strings of at most %d "
-                             "characters" % (MAX_REFERENCE_TASK_IDS, MAX_TASK_ID))
-        refs += values
+    for message in _fields(params, "message"):
+        for field in ("taskId", "contextId"):
+            for value in _fields(message, field):
+                if not _task_id(value):
+                    raise ValueError(f"message {field} is a non-empty string of at most {MAX_TASK_ID} characters")
+                refs.append(value)
+        for values in _fields(message, "referenceTaskIds"):
+            if not isinstance(values, list) or len(values) > MAX_REFERENCE_TASK_IDS or \
+                    any(not _task_id(value) for value in values) or len(set(values)) != len(values):
+                raise ValueError("message referenceTaskIds is a list of at most %d unique non-empty strings of at "
+                                 "most %d characters" % (MAX_REFERENCE_TASK_IDS, MAX_TASK_ID))
+            refs += values
     return tuple(refs)
 
 
@@ -138,9 +141,10 @@ def _task_id(value):
     return isinstance(value, str) and bool(value) and len(value) <= MAX_TASK_ID
 
 
-def _task_created(value):
-    """The task id an A2A response creates, if it is a task result."""
-    return value.get("id") if isinstance(value, dict) and value.get("kind") == "task" else None
+def _given(value):
+    """The task and context ids an A2A result gives its caller: a task's id and context id, a message's context id."""
+    kind = value.get("kind") if isinstance(value, dict) else None
+    return [value.get(k) for k in {"task": ("id", "contextId"), "message": ("contextId",)}.get(kind, ())]
 
 
 class _A2aGateway(_Handler):
@@ -178,10 +182,10 @@ class _A2aGateway(_Handler):
                                  f"{', '.join(sorted(METHODS))}")
         if not isinstance(params, dict):
             raise _Error(-32602, "params is an object")
-        if method == "message/send" and isinstance(params.get("configuration"), dict) and isinstance(
-                params["configuration"].get("pushNotificationConfig"), dict) and \
-                "url" in params["configuration"]["pushNotificationConfig"]:
-            raise _Error(-32602, "message/send does not relay push notification URLs")
+        if any(push is not None for conf in _fields(params, "configuration")
+               for push in _fields(conf, "pushNotificationConfig")):
+            raise _Error(-32602, "the gateway does not relay push notification configs; read the task's state with "
+                                 "message/stream or tasks/get")
         try:
             refs = _task_refs(method, params)
         except ValueError as e:
@@ -214,7 +218,8 @@ class _A2aGateway(_Handler):
         gw["custody"].complete(key, tcid, d, tool, args, "ok" if "result" in out else "error",
                                result=result_field(True, value))
         if method == "message/send" and "result" in out:
-            gw["tasks"].add(key[2], _task_created(out["result"]))
+            for ref in _given(out["result"]):
+                gw["tasks"].add(key[2], ref)
         return out
 
     def _stream(self, gw, up, resp, call, rid):
@@ -239,7 +244,8 @@ class _A2aGateway(_Handler):
                                               "source": f"{tool}#{tcid}", "value": result_field(True, out),
                                               "trust": "untrusted"})
                 events.append(out)
-                gw["tasks"].add(key[2], _task_created(out.get("result")))
+                for ref in _given(out.get("result")):
+                    gw["tasks"].add(key[2], ref)
                 if _final(out):   # the call's result is recorded before the client gets its last event
                     gw["custody"].complete(key, tcid, d, tool, args, "error" if "error" in out else "ok",
                                            result=result_field(True, events))
