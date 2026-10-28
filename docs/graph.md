@@ -19,6 +19,11 @@ output directory (default: `tracekit-graph`):
 - `GRAPH_REPORT.json`, the report data;
 - `GRAPH_REPORT.md`, the report for reading.
 
+Each file is written as a new file and renamed into place. `build` never writes through a symlink: it refuses an
+output directory that is a symlink, or a symlink in place of one of its files, because anyone who can write the folder
+(such as an agent in its own repo) could point one at a file elsewhere. Remove the symlink or pick another `-o`.
+Parent directories may be symlinks.
+
 ## Build
 
 `tracekit graph build SOURCES... --trust trust.json [--content] [--graphify FILE] [-o DIR]` reads v2 `.tkb`
@@ -142,7 +147,9 @@ or read `graph.json` for the rest.
 ## Join with Graphify
 
 When `graphify-out/graph.json` exists, it is the default Graphify input. Pass `--graphify FILE` to use another file,
-or `--graphify ''` to disable the join. The join reads Graphify JSON only; it does not need Graphify installed.
+or `--graphify ''` to disable the join. The join reads Graphify JSON only; it does not need Graphify installed. Build
+reads the input as verify reads a source: it must be a regular file of at most 512 MiB, not a symlink, a FIFO, or a
+device.
 
 Each graph file node can link to Graphify code nodes in the same source file with `contains`. The longest whole
 Graphify `source_file` suffix that matches the Tracekit path wins. A shared basename or shorter tail does not link.

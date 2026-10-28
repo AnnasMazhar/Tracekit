@@ -18,12 +18,13 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 import uuid
 from unittest import mock
 
-from factories import ROOT, patch_env, rewrite_bundle
+from factories import ROOT, SLOWER, patch_env, rewrite_bundle
 from tracekit import cli, graph, install
 from tracekit.demo_server import Witness, _serve, export_final
 from tracekit.deploy import files
@@ -550,6 +551,54 @@ class ReviewRegressions(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, "not a regular file"):
                     graph._secure_source(source)
 
+    @unittest.skipUnless(hasattr(os, "symlink"), "requires symlinks")
+    def test_write_never_writes_through_a_symlink_in_or_as_the_output_directory(self):
+        doc = self.doc(Graph(None, "grade"))
+        with tempfile.TemporaryDirectory() as d:
+            victim, out, elsewhere = (os.path.join(d, n) for n in ("victim.txt", "tracekit-graph", "elsewhere"))
+            with open(victim, "w") as f:
+                f.write("the person's file")
+            os.mkdir(out)
+            os.symlink(victim, os.path.join(out, graph.REPORT))   # planted by anyone who can write the folder
+            with self.assertRaisesRegex(OSError, "symlink"):
+                graph.write(doc, out)
+            with open(victim) as f:
+                self.assertEqual(f.read(), "the person's file")
+            os.mkdir(elsewhere)
+            linked = os.path.join(d, "linked")
+            os.symlink(elsewhere, linked)
+            with self.assertRaisesRegex(OSError, "symlink"):
+                graph.write(doc, linked)
+            self.assertEqual(os.listdir(elsewhere), [])
+            os.remove(os.path.join(out, graph.REPORT))
+            graph.write(doc, out)
+            with open(os.path.join(d, "made by open"), "w"):
+                pass
+            self.assertEqual({os.stat(os.path.join(out, n)).st_mode for n in graph.FILES},
+                             {os.stat(os.path.join(d, "made by open")).st_mode})   # the mode the umask leaves
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires FIFOs")
+    def test_build_refuses_a_fifo_as_its_graphify_input_without_blocking(self):
+        with tempfile.TemporaryDirectory() as d:
+            trust, fifo = os.path.join(d, "trust.json"), os.path.join(d, "graph.json")
+            with open(trust, "w") as f:
+                f.write("{}")
+            os.mkfifo(fifo)   # as one planted at the default graphify-out/graph.json
+            got = []
+
+            def build():
+                try:
+                    graph.build([], trust, graphify=fifo)
+                except ValueError as e:
+                    got.append(str(e))
+            t = threading.Thread(target=build, daemon=True)
+            t.start()
+            t.join(5)
+            if t.is_alive():   # blocked opening it: a writer releases it
+                os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+                self.fail("build blocked on a FIFO as its Graphify input")
+        self.assertEqual(got, [f"{fifo}: source is not a regular file; pass --graphify '' to build without it"])
+
 
 @unittest.skipUnless(os.name == "posix", "the Claude Code hook runs through a POSIX shell")
 class EndToEnd(unittest.TestCase):
@@ -955,8 +1004,9 @@ class EndToEnd(unittest.TestCase):
         os.makedirs(one_cwd)
         os.makedirs(two_cwd)
         for directory in (one_cwd, two_cwd):
-            for source in self.sources + [self.graphify]:
+            for source in self.sources:
                 os.symlink(source, os.path.join(directory, os.path.basename(source)))
+            shutil.copy(self.graphify, directory)   # a Graphify input is read only from a regular file
         try:
             os.chdir(one_cwd)
             self.assertEqual(run("build", *(os.path.basename(s) for s in self.sources), "--trust", self.trust,
@@ -1150,6 +1200,23 @@ class Records(unittest.TestCase):
         start = time.monotonic()
         self.assertEqual(graph._graphify(g, p)["linked"], 5000)
         self.assertLess(time.monotonic() - start, 1.0)
+
+    def test_graphify_join_is_linear_in_path_parts(self):
+        n = 40000   # tried suffix by suffix, joined again for each, this took about 6.5 s
+        g = Graph(None, "grade")
+        path = "/repo/" + "a/" * n + "x.py"
+        graph._node(g, "file:" + path, "file", path)
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        p = os.path.join(d, "graph.json")
+        # a source_file as deep as the path, but no suffix of it: capping the suffixes tried by depth wouldn't help
+        files.write_json(p, {"nodes": [{"id": "x", "source_file": "a/x.py"},
+                                       {"id": "deep", "source_file": "b/" + "a/" * n + "x.py"}]}, 0o644)
+        start = time.monotonic()
+        self.assertEqual(graph._graphify(g, p)["linked"], 1)
+        self.assertLess(time.monotonic() - start, SLOWER)
+        self.assertEqual([(e["dst"], e["record"]["source_file"]) for e in g.edges if e["kind"] == "contains"],
+                         [("code:x", "a/x.py")])
 
 
 if __name__ == "__main__":

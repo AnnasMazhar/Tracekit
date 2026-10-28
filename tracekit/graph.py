@@ -463,9 +463,11 @@ def _graphify(g: Graph, path: str, data: Optional[bytes] = None) -> Dict[str, An
     its end, linked from that file (INFERRED, or UNVERIFIED if only an unverified source names the file): what the
     agents changed, by function and concept. Read-only.
     lean: Graphify's own edges (calls, imports) are left out; add them when a query must reach past the file"""
-    if data is None:
-        with open(path, "rb") as f:
-            data = f.read()
+    if data is None:   # a FIFO, device or symlink planted at the default path is refused, as verify refuses it
+        try:
+            data = _secure_source(path)
+        except (OSError, ValueError) as e:
+            raise ValueError(f"{e}; pass --graphify '' to build without it") from e
     top = json.loads(data)
     if not (isinstance(top, dict) and isinstance(top.get("nodes"), list)):
         raise ValueError(f"{path} is not a Graphify graph.json (it has no list of nodes); pass --graphify '' to build "
@@ -476,11 +478,21 @@ def _graphify(g: Graph, path: str, data: Optional[bytes] = None) -> Dict[str, An
         if isinstance(sf, str) and sf.strip("./") and n.get("id") is not None:
             normalized = sf.replace("\\", "/").removeprefix("./")
             by_file.setdefault(normalized, []).append(n)
+    tails: Dict[Any, Any] = {}   # by_file's paths by their parts, last part first: the join is linear in path parts
+    for sf in by_file:
+        t = tails
+        for part in reversed(sf.split("/")):
+            t = t.setdefault(part, {})
+        t[None] = sf
     linked = 0
     for f in sorted((n for n in g.nodes.values() if n["kind"] == "file"), key=lambda n: n["id"]):
         normalized = f["label"].replace("\\", "/").removeprefix("./")
-        parts = normalized.split("/")
-        sf = next(("/".join(parts[i:]) for i in range(len(parts)) if "/".join(parts[i:]) in by_file), None)
+        t, sf = tails, None
+        for part in reversed(normalized.split("/")):   # the longest whole suffix in by_file
+            t = t.get(part)
+            if t is None:
+                break
+            sf = t.get(None, sf)
         provenance = g.in_edges(f["id"], GRADES)
         unverified = provenance and all(e["grade"] == "UNVERIFIED" for e in provenance)
         for n in sorted(by_file.get(sf or "", ()), key=lambda n: str(n["id"])):
@@ -1041,10 +1053,17 @@ def _and(names) -> str:
 
 
 def write(doc: Dict[str, Any], out: str) -> None:
+    """FILES into `out`, never through a symlink: a symlinked `out`, or a symlink in a file's place (anyone who can
+    write `out`, such as an agent in its repo, can plant one), is refused, and each file is a new one renamed into
+    place. Parent directories may be symlinks."""
+    from .deploy import files
     os.makedirs(out, exist_ok=True)
-    for name, text in _files(doc).items():
-        with open(os.path.join(out, name), "w", encoding="utf-8", newline="\n") as f:
-            f.write(text)
+    d = files.open_dir(out)
+    try:
+        for name, text in _files(doc).items():
+            files.write(d, name, text.encode("utf-8"), None)
+    finally:
+        files.close(d)
 
 
 def verify(out: str, trust: str, content: Optional[Content] = None, paths: Optional[List[str]] = None,
