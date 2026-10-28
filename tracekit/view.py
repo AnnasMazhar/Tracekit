@@ -1171,7 +1171,7 @@ class StoreFeed:
                 if not count:
                     return None
                 export(r, tenant, run_id, note[1], out)
-                verified, _, code = bundle_records(out, self.trust)
+                verified, _, code = bundle_records(out, self.trust, self.memo)   # the watcher's: its records checked once
             except ValueError:   # the store does not match its own checkpoint
                 return None
             finally:

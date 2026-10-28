@@ -553,6 +553,31 @@ class View(unittest.TestCase):
         self.assertEqual([r["tool_use_id"] for r in json.loads(body)["rows"] if r["event"] == "PreToolUse"],
                          ["c1", "c2", "c3"])
 
+    def test_a_rows_check_does_not_check_again_what_the_watcher_checked(self):
+        """A cache miss checked every record of the run again from nothing (its signature and schema), while the
+        watcher had checked the same records: a 30,000-record run took 18 s for 100 rows."""
+        run_id = self.finished_run()
+        feed = store_feed(self, {"data_dir": self.d})
+        self.report(feed, run_id)
+        me, inside, schema = threading.get_ident(), [], []
+        real_check, real_validate = import_v2.bundle_records, view.v2.validate
+
+        def check(*a, **k):   # rows()'s own check: not the test harness's check of each bundle exported
+            inside.append(1)
+            try:
+                return real_check(*a, **k)
+            finally:
+                inside.pop()
+
+        def validate(e):   # this thread's schema checks only: the watcher's own are its business
+            if inside and threading.get_ident() == me:
+                schema.append(e["seq"])
+            return real_validate(e)
+        with mock.patch.object(import_v2, "bundle_records", side_effect=check), \
+                mock.patch.object(view.v2, "validate", side_effect=validate):
+            self.assertIsNotNone(feed.rows(observe.ALL, "default", run_id))
+        self.assertEqual(schema, [])
+
     def test_with_a_content_source_each_decision_carries_its_arguments(self):
         """The tape named every allowed call "no rule matched": with the dev signer's retained arguments each decision
         carries them (the page names the call by them), asked for once, for exactly the run's decisions."""
