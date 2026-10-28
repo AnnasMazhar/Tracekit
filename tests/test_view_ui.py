@@ -1008,6 +1008,19 @@ class Horizon(unittest.TestCase):
             process.stdout.write(JSON.stringify([D.ev.map(e => e.run), [undefined, ...D.ev].map(cur => hzSecs(D.ev, cur))]));"""))
         self.assertEqual(out, [["bad", "w", "w", "w"], [0, 0, 0, 60, 120]])
 
+    def test_a_why_log_call_is_never_graded_signed(self):
+        """With why logs alone /api/verify answers ok with no records (NO SIGNED RECORDS on the top chip), and HORIZON
+        graded every why-log call SIGNED and its HUD said ✓ VERIFIED."""
+        needs_node(self)
+        recs = [why_call(i, "w", 100 + i) for i in range(1, 4)]
+        out = json.loads(page_js(["dict", "FIELD", "FILE_TOOLS", "subject", "rel", "category", "ANSWER", "lseq", "vis", "treeOrder", "HZMAX",
+                                  "hzRad", "hzPath", "hzPlace", "hzRest", "hzData", "hzChain"], f"""
+            const ALL = {json.dumps(recs)}, RUNS = new Map(), V2 = false, chainState = {{ ok: true, n: 0 }};
+            let hzKey = [], hzD = null;
+            const D = hzData();
+            process.stdout.write(JSON.stringify([[...new Set(D.ev.map(e => e.gr))], hzChain(D.ev), hzChain([])]));"""))
+        self.assertEqual(out, [["unverified"], ["3 UNVERIFIED", "warn"], ["–", "ok"]])
+
     def test_the_cap_orders_v1_calls_by_the_signers_time_not_the_agents(self):
         """A v1 event's ts comes from the client (tracekitd's setdefault): a call that backdates its ts stays on the map."""
         recs = [{**hz_call(i, "Read", {"file_path": f"src/f{i}.py"}), "ts_signed": 1000 + i} for i in range(1, 601)]

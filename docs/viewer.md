@@ -196,7 +196,8 @@ run's calls around a black hole: the rings are the project (relative paths, or i
 it records one), this machine and the outside world; a shield marks a restricted place (a rule about secrets, harness
 configuration or Tracekit's own files matched), a jet data that left the machine. **REPLAY** plays the calls in order,
 an agent's chip follows its route, ORBIT and TOP change the view, and a click on a place lists who went there and how
-we know (signed, observed by a sensor, or unverified). Calls whose arguments the viewer has only as commitments are
+we know (signed, observed by a sensor, or unverified: its run did not verify, or a why log wrote it, which nothing
+signs). Calls whose arguments the viewer has only as commitments are
 placed by their tool, and the page says how many. With reduced motion it draws still frames.
 
 ### GRAPH: click a node

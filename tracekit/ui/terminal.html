@@ -3322,7 +3322,8 @@
       for (const r of ALL) {
         const fx = r.v2?.effect, d = r.v2?.decision ?? (r.policy?.decision === "deny" ? "deny" : "allow"), rules = r.v2?.rules || [];
         if (r.analysis || r.signer || !(r.event === "PreToolUse" || fx?.kind === "connect" || fx?.kind === "file")) continue;
-        const a = ans.get(r.session_id + "|" + (r.tool_use_id ?? r.v2?.tool_use_id)), ok = V2 ? RUNS.get(r.session_id)?.verdict === "verified" : chainState.ok === true;
+        // a why log's row (r.why) is the agent's own unsigned record: never signed, whatever the chain check says
+        const a = ans.get(r.session_id + "|" + (r.tool_use_id ?? r.v2?.tool_use_id)), ok = !r.why && (V2 ? RUNS.get(r.session_id)?.verdict === "verified" : chainState.ok === true);
         const p = fx ? (fx.kind === "connect" ? ["outside", String(fx.target).replace(/:\d+$/, "")] : hzPath(String(fx.target), r.cwd))
           : hzPlace(r.tool_name, r.tool_input, r.cwd) || [category({ tool: r.tool_name, flags: [] }) === "net" ? "outside" : "machine", r.tool_name, true];
         raw.push({ t: r.ts_signed ?? r.ts, unread: !!r.ts_unread, seq: lseq(r), run: r.session_id, cwd: r.cwd, p, bare: !fx && !Object.keys(r.tool_input || {}).length, rest: hzRest(rules),
@@ -3354,8 +3355,10 @@
     const HZKEY = `<div class="sec">HOW TO READ IT</div><div><span class="hzs">●</span> read, ran or reached</div><div><span class="hzs a-write">■</span> wrote, or a person approved it</div>`
       + `<div><span class="hzs a-blocked">✕</span> blocked by policy</div><div><span class="hzs a-held">◯</span> held for a person</div><div><span class="hzs">◆</span> flagged</div>`
       + `<div><span class="hzshield"></span> shield: a restricted place (a rule about secrets, harness configuration or Tracekit's own files); a flare where an agent was stopped</div>`
-      + `<div><span class="hzjet"></span> jet: data left the machine</div><div><span class="tag">SIGNED</span> the signer's record says so · <span class="tag flag">OBSERVED</span> a sensor outside the agent saw it · <span class="tag unv">UNVERIFIED</span> its run did not verify</div>`
+      + `<div><span class="hzjet"></span> jet: data left the machine</div><div><span class="tag">SIGNED</span> the signer's record says so · <span class="tag flag">OBSERVED</span> a sensor outside the agent saw it · <span class="tag unv">UNVERIFIED</span> its run did not verify, or a why log wrote it (unsigned)</div>`
       + `<div class="dim">The rings are the project (the run's working directory; a run that records none: its relative paths), this machine and the outside world, around the event horizon every run starts from. Click a place to see who went there and how we know; click an agent to follow its route.</div>`;
+    // the HUD's CHAIN: how many drawn moves no verified signed record backs
+    const hzChain = ev => { const unv = ev.filter(e => e.gr === "unverified").length; return [!ev.length ? "–" : unv ? `${unv} UNVERIFIED` : "✓ VERIFIED", unv ? "warn" : "ok"]; };
     function renderHorizon() {
       if (PAGE !== "horizon") return;
       const D = HZ.d = hzData(), N = D.ev.length, pal = css("--hz-agents").split(/\s+/);
@@ -3380,11 +3383,11 @@
         + (D.bare ? `<p class="hznote">${esc(`${D.bare} of ${N} calls have their arguments only as a commitment here, so each is placed by its tool (on this machine, or outside for a network tool), not at a file or host.`)}</p>` : ""));
       // the HUD's words go in as text
       const out = ev.filter(e => P(e.at).kind === "outside"), rest = ev.filter(e => P(e.at).rest), ran = rest.filter(e => e.act !== "blocked" && e.act !== "held").length;
-      const unv = ev.filter(e => e.gr === "unverified").length, s = hzSecs(D.ev, cur);
+      const s = hzSecs(D.ev, cur);
       $("hzclock").textContent = "T+ " + [s / 3600, s % 3600 / 60, s % 60].map(v => String(Math.floor(v)).padStart(2, "0")).join(":");
       $("hzmove").textContent = `${String(HZ.t).padStart(2, "0")} / ${N}`;
       [[new Set(out.map(e => e.at)).size, out.length ? "warn" : ""], [`${rest.length} · ${ran} RAN`, rest.length ? "warn" : ""], [ev.filter(e => e.act === "blocked").length, ""],
-       [ev.filter(e => e.act === "held").length, ""], [!ev.length ? "–" : unv ? `${unv} UNVERIFIED` : "✓ VERIFIED", unv ? "warn" : "ok"]]
+       [ev.filter(e => e.act === "held").length, ""], hzChain(ev)]
         .forEach(([v, c], k) => { $("hzt" + k).textContent = vis(v); $("hzt" + k).className = c; });
       document.querySelectorAll("[data-hzv]").forEach(b => b.classList.toggle("on", b.dataset.hzv === HZ.view));
       // beside the stage: the counts, then the followed agent's route, the picked place's visitors or how to read it
