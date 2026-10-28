@@ -157,8 +157,9 @@ not proof; a *confirmed cause* changed how often the action happens in replays; 
 
 ![TIMELINE: every event of the run with its time, agent, type, what happened and how long it took; filters by agent, type, flagged and text](viewer/timeline.png)
 
-**TIMELINE**: every event, filtered by agent, type (inputs, model calls, tool calls, messages), **flagged only** and
-text. Click a row for its NODE.
+**TIMELINE** (the tape's **WHY LOG EVENTS** button: on a run's page, and on every page when no v2 runs are loaded):
+every event, filtered by agent, type (inputs, model calls, tool calls, messages), **flagged only** and text. Click a
+row for its NODE.
 
 ### WHY DID IT HAPPEN?
 

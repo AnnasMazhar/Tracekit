@@ -1119,7 +1119,7 @@ class NothingLost(unittest.TestCase):
         #view=timeline link: CALLS has a button to it, and it a button back."""
         needs_node(self)
         out = json.loads(page_js(["esc", "KINDS", "PAGES", "RVIEWS", "show", "centre", "kindChips"], """
-            let PAGE = "run", RV = "calls", CALLSLOG = false, F = { kind: null }, WHY = { runs: [] };
+            let PAGE = "run", RV = "calls", CALLSLOG = false, F = { kind: null }, WHY = { runs: [] }, V2 = true;
             const seen = [], click = html => show(/data-rv="([^"]+)"/.exec(html)[1]);
             click(kindChips()); seen.push([PAGE, RV, centre()]);
             show("calls"); seen.push(centre());
@@ -1201,6 +1201,22 @@ class NothingLost(unittest.TestCase):
                                ["WHY DID THIS HAPPEN?", "run", "why", "w1"], ["why run on RUNS", "run", "overview", "w1"],
                                ["why alert", "run", "why", "w1"]])
 
+    def test_a_viewer_with_only_why_logs_has_a_button_to_their_events(self):
+        """With why logs and no v2 runs (tracekit view --why DIR, the why report) the tape drew no kind chips, so the
+        why log's TIMELINE had no button (1.4.2's header had one)."""
+        needs_node(self)
+        out = json.loads(page_js(["esc", "KINDS", "anyFilter", "kindChips", "renderTape"], """
+            const el = {}, $ = id => el[id] ??= { textContent: "", innerHTML: "" }, put = (id, h) => { $(id).innerHTML = h; };
+            let F = { agent: null, tool: null, file: null, flag: false, find: null, kind: null }, S = { tape: [], recs: [] };
+            let tapeKey = [], tapeMax = 600, tapeShown = 0, selected = null; const DROPPED = 0, MAXREC = 50000, TAPE_PAGE = 600;
+            let PAGE = "desk", V2 = false, WHY = { runs: [{ run_id: "w1" }], calls: {}, alerts: [] };
+            const has = () => kindChips().includes('data-rv="timeline"');
+            renderTape(); const seen = [$("fchips").innerHTML.includes('data-rv="timeline"')];   // why logs only, on DESK
+            PAGE = "run"; seen.push(has());
+            V2 = true; seen.push(has()); PAGE = "desk"; seen.push(has(), kindChips().includes('data-kind=""'));   // v2: a run's page
+            V2 = false; WHY = null; seen.push(kindChips());   // no why logs, no v2 runs: nothing
+            process.stdout.write(JSON.stringify(seen));"""))
+        self.assertEqual(out, [True, True, True, False, True, ""])
 
     def test_each_page_places_the_panels_it_had(self):
         css = PAGE[PAGE.index("<style>"):PAGE.index("</style>")]
