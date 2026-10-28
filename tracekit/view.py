@@ -1172,7 +1172,8 @@ class StoreFeed:
                     return None
                 export(r, tenant, run_id, note[1], out)
                 verified, _, code = bundle_records(out, self.trust, self.memo)   # the watcher's: its records checked once
-            except ValueError:   # the store does not match its own checkpoint
+            # the store does not match its own checkpoint, or holds a record of a shape export can't read: not verified
+            except (ValueError, KeyError, TypeError, AttributeError, IndexError):
                 return None
             finally:
                 r.close()

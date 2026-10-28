@@ -553,6 +553,33 @@ class View(unittest.TestCase):
         self.assertEqual([r["tool_use_id"] for r in json.loads(body)["rows"] if r["event"] == "PreToolUse"],
                          ["c1", "c2", "c3"])
 
+    def test_rows_of_a_record_export_cannot_read_are_refused_not_a_dropped_connection(self):
+        """A record edited into a shape export doesn't expect (no data, data a number, type a list) raised KeyError or
+        TypeError out of /api/rows: the server closed the connection with no response, on every request for the run."""
+        run_id = self.finished_run()
+        feed = store_feed(self, {"data_dir": self.d})
+        self.report(feed, run_id)
+        self.service.close()
+        srv = view.server(feed, "127.0.0.1", 0, "t0k")
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        path = os.path.join(self.d, "store", "records.jsonl")
+        with open(path, "rb") as f:
+            lines = f.read().split(b"\n")
+        at = next(i for i, x in enumerate(lines) if b'"decision":"deny"' in x)
+        for edit in (lambda e: e.pop("data"), lambda e: e.update(data=5), lambda e: e.update(type=[e["type"]])):
+            rec = json.loads(lines[at])
+            edit(rec["event"])
+            with open(path, "wb") as f:
+                f.write(b"\n".join(lines[:at] + [json.dumps(rec, separators=(",", ":")).encode()] + lines[at + 1:]))
+            feed.rowcache.clear()
+            self.assertIsNone(feed.rows(observe.ALL, "default", run_id))
+            c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=10)
+            c.request("GET", f"/api/rows?tenant=default&run={run_id}", headers={"Authorization": "Bearer t0k"})
+            self.assertEqual(c.getresponse().status, 404)
+            c.close()
+
     def test_a_rows_check_does_not_check_again_what_the_watcher_checked(self):
         """A cache miss checked every record of the run again from nothing (its signature and schema), while the
         watcher had checked the same records: a 30,000-record run took 18 s for 100 rows."""
