@@ -11,6 +11,7 @@ connection, starts it again before reading the next one (restart_deadline), so a
 event stream also leaves the request limits for limits of its own (to_stream), so open pages never use up the
 requests their address may make."""
 import socket
+import ssl
 import sys
 import threading
 import time
@@ -50,9 +51,10 @@ def body_length(headers, digits=12):
     """(n, None): the request's body is the n bytes its one Content-Length says (n None: it declares none). (None, why):
     its framing is refused, with the connection closed. Every server here reads a body by Content-Length only; a proxy
     in front that frames it otherwise (by Transfer-Encoding, by another Content-Length, by a header line Python's parser
-    dropped together with every one after it) would forward the bytes past it as another request. A value is ASCII
-    digits only: int() also takes `+1`, `1_0` and other scripts' digits, and raises past 4,300 of them."""
-    if headers.defects:
+    dropped together with every one after it, folded into the one before it or left after a bare CR as a payload)
+    would forward the bytes past it as another request. A value is ASCII digits only: int() also takes `+1`, `1_0`
+    and other scripts' digits, and raises past 4,300 of them."""
+    if headers.defects or headers.get_payload() or any("\r" in v or "\n" in v for v in headers.values()):
         return None, "a malformed header line"
     if "transfer-encoding" in headers:
         return None, "Transfer-Encoding isn't supported: send the body with Content-Length"
@@ -142,8 +144,9 @@ class Server(ThreadingHTTPServer):
                 self._ip_release(client_address[0])
 
     def handle_error(self, request, client_address):
-        """A connection cut by its deadline, a timeout or the client is routine: no traceback for it."""
-        if not isinstance(sys.exc_info()[1], (ConnectionError, socket.timeout)):
+        """A connection cut by its deadline, a timeout or the client, or a TLS record that doesn't open, is routine: no
+        traceback for it."""
+        if not isinstance(sys.exc_info()[1], (ConnectionError, socket.timeout, ssl.SSLError)):
             super().handle_error(request, client_address)
 
     def to_stream(self, ip):

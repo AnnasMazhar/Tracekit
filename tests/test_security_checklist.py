@@ -367,6 +367,15 @@ class Surfaces(unittest.TestCase):
                 with self.subTest(server=name, request=request):
                     self.assertEqual(exchange(port, wire(request, lines, b"{}")), ([400], True))
 
+    def test_a_header_hidden_in_a_folded_line_or_after_a_bare_cr_is_refused(self):
+        """Python's parser reads an obs-fold line as part of the header before it, and ends the headers at a bare CR
+        (the rest is left as a payload), with no defect either way: a Content-Length hidden so would go unread."""
+        for shape in (["X-A: b", " Content-Length: 2"], ["X-A: b\r", "Content-Length: 2"]):
+            for name, port, reads, _ in self.kept_alive():
+                for request in reads:
+                    with self.subTest(shape=shape, server=name, request=request):
+                        self.assertEqual(exchange(port, wire(request, AUTH + shape, b"{}")), ([400], True))
+
     def test_content_length_is_ascii_digits_only(self):
         """int() takes `+2` and `1_0`; an empty value is no length, not 0."""
         for request, srv in (("POST /v1/traces", self.otlp()[0]), ("GET /__tracekit_health", self.proxy()[0])):

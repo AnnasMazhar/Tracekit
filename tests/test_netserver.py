@@ -344,6 +344,32 @@ class SilentClient(unittest.TestCase):
             time.sleep(0.3 * SLOWER)
         self.assertIn("ValueError: a bug in the handler", err.getvalue())
 
+    def test_a_corrupt_tls_record_logs_no_traceback(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        port = self.start(netserver.Server(("127.0.0.1", 0), BaseHTTPRequestHandler, ssl_context=self_signed(d),
+                                           timeout=2, deadline=2))
+        s = socket.create_connection(("127.0.0.1", port))
+        self.socks.append(s)
+        s.settimeout(3)
+        incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
+        tls = ssl._create_unverified_context().wrap_bio(incoming, outgoing)
+        while True:   # a real handshake, then a record no key opens, on the raw socket
+            try:
+                tls.do_handshake()
+                break
+            except ssl.SSLWantReadError:
+                s.sendall(outgoing.read())
+                incoming.write(s.recv(65536))
+        s.sendall(outgoing.read())
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            s.sendall(b"\x17\x03\x03\x00\x20" + b"\x00" * 32)
+            while s.recv(65536):   # tickets or an alert, then the server closes it
+                pass
+            time.sleep(0.3 * SLOWER)
+        self.assertEqual(err.getvalue(), "")
+
 
 class Drain(unittest.TestCase):
     def test_a_trickling_client_cannot_hold_the_drain(self):
