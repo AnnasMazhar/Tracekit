@@ -6,6 +6,7 @@ import json
 import os
 import socket
 import threading
+import time
 import unittest
 from http.server import ThreadingHTTPServer
 from unittest import mock
@@ -174,6 +175,17 @@ class CentralViewer(unittest.TestCase):
         status, _, body = self.get("/api/runs?verdict=failed", self.acme)
         self.assertEqual([(r["run_id"], r["verdict"]["label"]) for r in json.loads(body)["runs"]],
                          [(self.ids["a2"], view.OPERATOR_SIDE)])
+
+    @pytest.mark.unverified_bundles
+    def test_the_run_list_checks_a_run_again_once_its_verdict_is_old(self):
+        """The run list kept a run's "verified" for good after its records were edited in place (the same count): it
+        changed only once someone opened that run's page."""
+        self.assertIn("a2", self.listed("?verdict=verified", self.acme))
+        pg.sql(self.admin1, "UPDATE tracekit_records SET record = regexp_replace(record::text, '\"tool\": ?\"Bash\"', "
+               "'\"tool\":\"Bosh\"')::json WHERE run_id = %s", (self.ids["a2"],))
+        self.assertIn("a2", self.listed("?verdict=verified", self.acme))   # the last check's verdict, until it is old
+        with mock.patch.object(view.time, "time", return_value=time.time() + view.RECHECK_S + 1):
+            self.assertEqual(self.listed("?verdict=failed", self.acme), ["a2"])
 
     def test_downloaded_bundle_verifies_offline(self):
         status, r, data = self.get(f"/api/bundle?log=0&tenant=acme&run={self.ids['a1']}", self.acme)

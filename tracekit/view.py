@@ -1304,7 +1304,8 @@ class Runs:
 
     def _verdict(self, r, i, note, tenant, run_id, cached=True):
         """{verdict (VERDICTS), integrity, assurance, label, report} of the run in reader `r` of log `i`, or None when it
-        holds no such run; with `cached` False, checked on `r` whatever the cache holds."""
+        holds no such run; with `cached` False, checked on `r` whatever the cache holds. A kept verdict is checked again
+        RECHECK_S after its check, as StoreFeed's are, so an edit of a run's records in place shows in the list."""
         run = r.runs.get((tenant, run_id))
         if run is None:
             return None
@@ -1313,8 +1314,8 @@ class Runs:
                     "report": "No checkpoint covers the run's last record yet."}
         key = (i, tenant, run_id, len(run["seqs"]))
         with self._lock:
-            v = self._verdicts.get(key) if cached else None
-        if v is None:
+            v, at = self._verdicts.get(key, (None, 0)) if cached else (None, 0)
+        if v is None or time.time() >= at + RECHECK_S:
             fd, out = tempfile.mkstemp(suffix=".tkb", dir=self.tmp)   # requests run concurrently: a file each
             os.close(fd)
             try:
@@ -1324,7 +1325,7 @@ class Runs:
             v = {"verdict": "failed" if code else "verified", "integrity": rep.integrity,
                  "assurance": rep.assurance.split(";")[0], "label": OPERATOR_SIDE, "report": text}
             with self._lock:
-                self._verdicts[key] = v
+                self._verdicts[key] = v, time.time()
                 while len(self._verdicts) > VERDICTS_MAX:
                     self._verdicts.popitem(last=False)
         return v
