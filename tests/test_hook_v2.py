@@ -1099,9 +1099,9 @@ if __name__ == "__main__":
 
 
 class HoldLine(unittest.TestCase):
-    def hold_lines(self, reason):
+    def hold_lines(self, reason, signer=None):
         """Return the waiting line and the not-approved follow-up from one ask that is rejected."""
-        client = mock.Mock(timeout=30.0, signer=None)
+        client = mock.Mock(timeout=30.0, signer=signer)
         run = mock.Mock(run_id="r1")
 
         def call(method, **fields):
@@ -1135,6 +1135,22 @@ class HoldLine(unittest.TestCase):
         waiting, not_approved = self.hold_lines("Hold for review...")
         self.assertIn("(TK-A003): Hold for review...; a person approves it", waiting)
         self.assertIn("(TK-A003: Hold for review...) and not approved:", not_approved)
+
+    def test_on_windows_a_named_signer_is_in_double_quotes(self):
+        """cmd.exe reads no single quotes, so `--signer 'x'` fails there; cmd.exe and PowerShell both read double
+        quotes as written. A name holding what either still reads inside them (a quote, PowerShell's curly ones, its
+        `$` and backtick, a line break) would run as something else: the person fills it in."""
+        for signer, named in (("http://[::1]:8080", '"http://[::1]:8080"'),
+                              ("https://127.0.0.1:8443/a&calc", '"https://127.0.0.1:8443/a&calc"'),
+                              ('https://127.0.0.1:8443/"&calc&"', "<TRACEKIT_SIGNER>"),
+                              ("https://127.0.0.1:8443/\u201d;calc;\u201c", "<TRACEKIT_SIGNER>"),
+                              ("https://127.0.0.1:8443/$(calc)", "<TRACEKIT_SIGNER>"),
+                              ("https://127.0.0.1:8443/a`", "<TRACEKIT_SIGNER>"),
+                              ("tcp://127.0.0.1:7777\r\ncalc", "<TRACEKIT_SIGNER>")):
+            with self.subTest(signer), mock.patch.object(os, "name", "nt"):
+                waiting, _ = self.hold_lines("x", signer)
+                self.assertIn(f"`tracekit approvals --signer {named} approve apr-1` or rejects it with "
+                              f"`tracekit approvals --signer {named} reject apr-1`", waiting)
 
 
 class PreBudget(unittest.TestCase):
