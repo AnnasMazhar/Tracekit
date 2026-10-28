@@ -63,15 +63,24 @@ bundle verifies with the 1.4.2 verifier too, which lists PCM records as not inte
   nonce itself. The message carries a typed intent (a schema named by its hash), claims (`tests_passed`,
   `approved_by`, `reached_host`, `file_written`), each with records from the sender's signed log as evidence
   (`run.pcm_evidence`), and grants: a person's signed approval of who may ask for what, within which limits, until
-  when (at most 24 h; `run.pcm_grant`). The receiver checks it offline with the trust.json it already has:
-  `tracekit pcm verify MSG --trust trust.json --schema S` exits 0 (accept), 3 (accept, a claim unproven), 1 (reject)
-  or 2 (bad input); `pcm.verify` in Python, given a `pcm.Replay`, also refuses a replay. A root grant needs a
-  person's approval of a `pcm.grant` call, which no shipped pack asks for: add an ask rule. Each message and grant is
-  an `ext` record (`pcm.sent`, `pcm.grant`) in the sender's run. `tracekit pcm demo` runs two agents through a refund
-  request. A host in a claim or a fetched URL is compared in printable ASCII only, so a Unicode host comes out
-  unproven, with the reason saying to send it in its `xn--` form. Tracekit is the reference implementation of PCM,
-  whose specification will be published separately; the A2A gateway doesn't check PCM yet, and TypeScript has no PCM
-  verifier ([PCM](docs/pcm.md), [limits](docs/limits.md#pcm-01-proof-carrying-messages-experimental)).
+  when (at most 24 h; `run.pcm_grant`). The receiver checks it offline with a trust.json that pins one key per log
+  (`tracekit signer trust` writes one): `tracekit pcm verify MSG --trust trust.json --schema S` exits 0 (accept), 3
+  (accept-unproven: a claim is unproven), 1 (reject) or 2 (bad input: a file it can't read, a schema document that is
+  none, a number past the double range such as `1e400`, or two keys of one log), and after a proven `tests_passed` or
+  `file_written` prints how long before the message its evidence is, since a claim proves a call happened, not that
+  nothing changed since; `pcm.verify` in Python, given a `pcm.Replay`, also refuses a replay. `approved_by` alone
+  proves only that the person approved the call the agent named; with `covers: true` the approval must also cover the
+  request, by having issued the message's root grant or by being of the tool the schema names with the intent's args,
+  and a schema that lists `approved_by` needs such a claim (else accept-unproven, reject with `--strict`).
+  `reached_host` compares hosts in printable ASCII only: a URL with a Unicode host or a space, a URL with no scheme
+  (`api.example.com/x`) and an IPv4 address not written as a dotted quad (`0127.0.0.1`, `127.1`) are unproven, the
+  call's reason saying what to send instead, and a call the host answered with an HTTP error (a 404) fails the claim,
+  as its result is not ok. A root grant needs a person's approval of a `pcm.grant` call, which no shipped pack asks
+  for: add an ask rule. Each message and grant is an `ext` record (`pcm.sent`, `pcm.grant`) in the sender's run.
+  `tracekit pcm demo` runs two agents through a refund request on a real signer in a temp dir. Tracekit is the
+  reference implementation of PCM, whose specification will be published separately; the A2A gateway doesn't check PCM
+  yet, and TypeScript has no PCM verifier ([PCM](docs/pcm.md),
+  [limits](docs/limits.md#pcm-01-proof-carrying-messages-experimental)).
 - **`tracekit graph` (experimental, #454).** `tracekit graph build RUN.tkb ... --trust trust.json` verifies each v2
   bundle and builds one graph of what the agents did across the runs: files written (and a kernel sensor's file
   events), hosts reached, approvals, secrets, rules and findings. Each edge is graded SIGNED (a signer record; `wrote`
