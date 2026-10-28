@@ -122,6 +122,38 @@ class HookOwnership(unittest.TestCase):
         self.assertIsNone(install._hook_version(group("python3 ~/src/tracekit-dogfood/scripts/hook.py")))
         self.assertEqual(install._hook_version(group("python3 /src/tracekit/hook.py")), "v1")
         self.assertEqual(install._hook_version(group("python3 -m tracekit.hook")), "v1")
+        for mine in ("python3 -m acme.tracekit.hooklog --stop", "python3 -m tracekit.hooks", "/x/acme-tracekit/hook.py",
+                     "python3 -m acme.tracekit.integrations.claude_code"):
+            self.assertIsNone(install._hook_version(group(mine)), mine)
+        for module in ("tracekit.hook", install.V2_HOOK):
+            for python in (None, install.OPT_PYTHON):
+                cmd = install._hook_command(module, args=("PreToolUse",) * (module == install.V2_HOOK), python=python)
+                self.assertEqual(install._hook_version(group(cmd)), "v2" if module == install.V2_HOOK else "v1", cmd)
+
+    def test_a_persons_hook_in_tracekits_group_stays(self):
+        """Uninstall and a v1<->v2 re-init dropped a whole group with a Tracekit hook in it, a person's own hook filed
+        into it too."""
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        p = os.path.join(d, "settings.json")
+        mine = {"type": "command", "command": "~/bin/my-audit.sh"}
+        stop = {"hooks": [{"type": "command", "command": "python3 -m acme.tracekit.hooklog --stop"}]}
+        with open(p, "w") as f:
+            json.dump({"hooks": {"Stop": [stop]}}, f)
+        with contextlib.redirect_stdout(io.StringIO()):
+            install.install_hooks(p)
+            s = install.read_json(p)
+            s["hooks"]["PreToolUse"][0]["hooks"].append(mine)
+            with open(p, "w") as f:
+                json.dump(s, f)
+            install.install_hooks(p, module=install.V2_HOOK)
+            pre = install.read_json(p)["hooks"]["PreToolUse"]
+            self.assertEqual(pre[0], {"matcher": "*", "hooks": [mine]})
+            self.assertEqual([install._hook_version(g) for g in pre], [None, "v2"])
+            self.assertEqual(len(pre[1]["hooks"]), 1)   # Tracekit's own group holds only its hook
+            install.install_hooks(p, uninstall=True)
+        self.assertEqual(install.read_json(p), {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [mine]}],
+                                                          "Stop": [stop]}})
 
 
 @unittest.skipUnless(CAN_SYMLINK, "needs symlinks")

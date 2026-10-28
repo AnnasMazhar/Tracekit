@@ -367,11 +367,18 @@ def _hook_version(group):
     hooks = group.get("hooks") if isinstance(group, dict) else None
     cmds = [h["command"] for h in hooks if isinstance(h, dict) and isinstance(h.get("command"), str)] \
         if isinstance(hooks, list) else []
-    if any(V2_HOOK in c for c in cmds):
-        return "v2"
-    if any("tracekit.hook" in c or re.search(r"tracekit[/\\]hook\.py", c) for c in cmds):
-        return "v1"
-    return None
+    versions = {_cmd_version(c) for c in cmds}
+    return "v2" if "v2" in versions else "v1" if "v1" in versions else None
+
+
+# the module Tracekit's hook command runs (-m, or imports from under -c), or an old v1 command's path to hook.py
+_HOOK_CMD = re.compile(rf"(?:-m |from )(tracekit\.hook|{re.escape(V2_HOOK)})(?![\w.])|(?<![\w.-])tracekit[/\\]hook\.py\b")
+
+
+def _cmd_version(cmd):
+    """"v2" for a command that runs Tracekit's v2 hook, "v1" for its v1 hook, else None (a person's own)."""
+    m = _HOOK_CMD.search(cmd) if isinstance(cmd, str) else None
+    return m and ("v2" if m.group(1) == V2_HOOK else "v1")
 
 
 def _is_ours(group):
@@ -593,8 +600,12 @@ def _install_hooks_at(d, settings_path, uninstall, proxy_url, extra, mode, pytho
             v = _hook_version(g) if isinstance(g, dict) else None
             if v is None:
                 groups.append(g)
-            elif uninstall or v != new:
+                continue
+            if uninstall or v != new:
                 replaced.add(v)
+            rest = [h for h in g["hooks"] if not (isinstance(h, dict) and _cmd_version(h.get("command")))]
+            if rest:   # a person's own hooks filed into Tracekit's group stay; Tracekit's go
+                groups.append({**g, "hooks": rest})
         if not uninstall:
             cmd = _hook_command(module, args=(ev,) if module == V2_HOOK else (), python=python,   # v2: names its event
                                 pre=ev == "PreToolUse")
