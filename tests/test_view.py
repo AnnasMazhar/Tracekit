@@ -33,7 +33,7 @@ from tracekit.policy2 import compile as policy_compile
 from tracekit.policy2.engine import Engine
 from tracekit.sdk.client import Client
 from tracekit.signer import service as svc
-from tracekit.storage.file import FileStorage
+from tracekit.storage.file import NOTE, FileStorage
 from tracekit.why.core import GENESIS, HttpSink, event_hash, load_run, referenced_refs
 from tracekit.why.demo import EXFIL_TARGET, SYSTEM
 from tracekit.why.graph import target_hits
@@ -653,6 +653,39 @@ class View(unittest.TestCase):
         self.assertEqual([r["v2"]["decision"] for r in rows if r["event"] == "PreToolUse"], ["allow", "deny", "ask"])
         self.assertEqual(dict([r for r in rows if r.get("review")][-1]["review"]["decisions"]),
                          {"allow": 1, "deny": 1, "ask": 1})
+
+    def test_a_store_it_cannot_check_or_a_note_gone_or_gone_back_stops_verification_and_says_so(self):
+        """One unreadable line, or the checkpoint note moved away, stopped every re-check while /api/verify stayed ok
+        and the page VERIFIED: an edit of a run already shown was never caught."""
+        run_id = self.finished_run()
+        note, path = os.path.join(self.d, "store", NOTE), os.path.join(self.d, "store", "records.jsonl")
+        with open(note, "rb") as f:
+            old = f.read()
+        self.finished_run()   # a later note: the first is an older one
+        self.service.close()
+        with open(note, "rb") as f:
+            newest = f.read()
+        with open(path, "rb") as f:
+            orig = f.read()
+
+        def put(p, data):
+            with open(p, "wb") as f:
+                f.write(data)
+        feed = store_feed(self, {"data_dir": self.d})
+        self.report(feed, run_id)
+        self.assertIsNone(feed.stopped)
+        for label, tamper, why in (
+                ("a broken line", lambda: put(path, orig.replace(b'"seq":0,', b'"seq":9,', 1)), "StorageCorrupt"),
+                ("the note moved away", lambda: os.remove(note), "went back from"),
+                ("an older note", lambda: put(note, old), "went back from")):
+            with self.subTest(label):
+                tamper()
+                self.assertTrue(wait_for(lambda: feed.stopped, 10))
+                self.assertIn(why, feed.stopped)
+                self.assertEqual(feed.verify()[1][-1:], [feed.stopped])   # /api/verify not ok: the page says STOPPED
+                put(path, orig)   # put back: checked again, and said no more
+                put(note, newest)
+                self.assertTrue(wait_for(lambda: feed.stopped is None, 10))
 
     def test_with_a_content_source_each_decision_carries_its_arguments(self):
         """The tape named every allowed call "no rule matched": with the dev signer's retained arguments each decision

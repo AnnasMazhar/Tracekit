@@ -851,7 +851,10 @@ class StoreFeed:
         self.rowcache = collections.OrderedDict()   # (tenant, run_id, its covered records) -> rows: the newest ROWCACHE_MAX
         self.verifying = threading.BoundedSemaphore(2)   # /api/rows checks at once
         self.tr = Translator(policy_reasons([cfg["policy"]] if cfg.get("policy") else []))
-        self.stopped = None   # why the watch thread ended, when it did: the page then says verification stopped
+        # why runs are not checked (the watch thread ended, or the store can't be checked): the page then says
+        # verification stopped
+        self.stopped = None
+        self.noted = 0   # the most records a checkpoint note covered: a signed note never goes back
         self.on_run, self.content, self.analyze = on_run, content, analyze
         # (tenant, run_id) -> the newest records of a run to mirror (on_run), off the watch thread: the tape never
         # waits for a graph, and a run that grew twice meanwhile is mirrored once
@@ -891,8 +894,11 @@ class StoreFeed:
                     seen = stamp
                     try:
                         self.refresh()
-                    except Exception as e:   # the store unreadable, or a bug: said, and tried again
+                        self.stopped = None
+                    except Exception as e:   # the store unreadable, its note gone or gone back, or a bug: said, tried again
                         print(f"tracekit view: cannot check {self.store}: {e!r}", file=sys.stderr, flush=True)
+                        self.stopped = f"verification stopped: {self.store} can't be checked ({type(e).__name__}: " \
+                                       f"{e}); no run is checked until it can be"
                 self._stop.wait(POLL_S)
         except BaseException as e:   # whatever ends the watch but close(): the page stops saying LIVE
             self.stopped = f"verification stopped ({type(e).__name__}: {e}): no run is checked until tracekit view " \
@@ -913,6 +919,10 @@ class StoreFeed:
             if note and note[0] > r.tree.size:
                 r.close()
                 r = reader(self.cfg)   # opened after the note: holds every record it covers
+            if (note[0] if note else 0) < self.noted:   # every run would go unchecked (covered 0) or partly checked
+                raise StorageCorrupt(f"its checkpoint note went back from {self.noted} to {note[0] if note else 0} "
+                                     "records: the store was edited or replaced")
+            self.noted = note[0] if note else 0
             for key, run in list(r.runs.items()):
                 covered = bisect.bisect_left(run["seqs"], note[0]) if note else 0   # its records the note covers
                 state = self.runs.get(key, {})
