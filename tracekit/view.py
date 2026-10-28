@@ -1322,9 +1322,10 @@ class Runs:
     def _verdict(self, r, i, note, tenant, run_id, cached=True):
         """({verdict (VERDICTS), integrity, assurance, label, report}, records) of the run in reader `r` of log `i`, or
         (None, []) when it holds no such run; `records`: the run's records as verify.v2 read them when this call checked
-        it and it verified, else []. With `cached` False, checked on `r` whatever the cache holds. A kept verdict is
-        checked again RECHECK_S after its check, as StoreFeed's are, so an edit of a run's records in place shows in the
-        list."""
+        it and it verified, else []. With `cached` False, checked on `r` whatever the cache holds (the caller holds a
+        check slot). A kept verdict is checked again RECHECK_S after its check, as StoreFeed's are, so an edit of a run's
+        records in place shows in the list; a list checks only with a check slot free, else it shows the kept verdict,
+        or NOT CHECKED for a run with none."""
         run, records = r.runs.get((tenant, run_id)), []
         if run is None:
             return None, records
@@ -1335,12 +1336,21 @@ class Runs:
         with self._lock:
             v, at = self._verdicts.get(key, (None, 0)) if cached else (None, 0)
         if v is None or time.time() >= at + RECHECK_S:
-            fd, out = tempfile.mkstemp(suffix=".tkb", dir=self.tmp)   # requests run concurrently: a file each
-            os.close(fd)
+            slot = cached and self.verifying.acquire(blocking=False)
+            if cached and not slot:
+                return v or {"verdict": "pending", "integrity": "NOT CHECKED", "assurance": "none",
+                             "label": OPERATOR_SIDE, "report": "Not checked yet: the viewer is checking other runs. "
+                                                               "Open the run to check it."}, records
             try:
-                rep, code, text, records = check(r, tenant, run_id, note[1], self.logs[i][1], out)
+                fd, out = tempfile.mkstemp(suffix=".tkb", dir=self.tmp)   # requests run concurrently: a file each
+                os.close(fd)
+                try:
+                    rep, code, text, records = check(r, tenant, run_id, note[1], self.logs[i][1], out)
+                finally:
+                    os.unlink(out)
             finally:
-                os.unlink(out)
+                if slot:
+                    self.verifying.release()
             v = {"verdict": "failed" if code else "verified", "integrity": rep.integrity,
                  "assurance": rep.assurance.split(";")[0], "label": OPERATOR_SIDE, "report": text}
             with self._lock:

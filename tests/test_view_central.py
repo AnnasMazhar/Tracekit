@@ -187,6 +187,26 @@ class CentralViewer(unittest.TestCase):
         with mock.patch.object(view.time, "time", return_value=time.time() + view.RECHECK_S + 1):
             self.assertEqual(self.listed("?verdict=failed", self.acme), ["a2"])
 
+    def test_a_list_checks_a_run_only_with_a_check_slot_free(self):
+        """A list checked every run whose verdict was old or missing, with no limit: 16 lists at once made 91 checks of
+        6 runs. With both check slots taken it checks none: a kept verdict shows as it is, a run never checked as NOT
+        CHECKED."""
+        def listed(port):
+            runs = json.loads(self.get("/api/runs", self.admin, port)[2])["runs"]
+            return {self.names[r["run_id"]]: r["verdict"]["integrity"] for r in runs if r["run_id"] in self.names}
+        runs, fresh = view.Runs(self.files), view.Runs(self.files)
+        port, fresh_port = self.serve(runs), self.serve(fresh)
+        kept = listed(port)
+        self.assertEqual(set(kept.values()), {"VERIFIED"})
+        for r in (runs, fresh):
+            r.verifying.acquire()
+            r.verifying.acquire()
+        with mock.patch.object(view, "check", wraps=view.check) as checked, \
+                mock.patch.object(view.time, "time", return_value=time.time() + view.RECHECK_S + 1):
+            self.assertEqual(listed(port), kept)
+            self.assertEqual(listed(fresh_port), dict.fromkeys(kept, "NOT CHECKED"))
+        self.assertEqual(checked.call_count, 0)
+
     def test_a_run_page_checks_two_runs_at_once_at_most(self):
         """Each /api/run request read the log and exported and verified its run with no limit: 16 at once made 16 full
         checks."""
