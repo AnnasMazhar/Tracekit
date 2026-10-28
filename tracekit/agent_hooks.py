@@ -21,8 +21,11 @@ Tool names are mapped onto Tracekit's policy vocabulary so the default rules app
     Codex   Bash, write_stdin, apply_patch, mcp__s__t     Bash, Bash (command = chars), Edit (paths: every file the
                                                           patch adds, updates, deletes or moves to), mcp__s__t
     Cursor  Shell, Read, Write, Grep, Delete, MCP:t   Bash, Read, Write, Grep, Edit, mcp__cursor__t
-    Gemini  run_shell_command, read_file, write_file, replace, glob, search_file_content, web_fetch, google_web_search
-            -> Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch
+    Gemini  run_shell_command, read_file, read_many_files, write_file, replace, glob, search_file_content,
+            list_directory, web_fetch, google_web_search
+            -> Bash, Read, Read, Write, Edit, Glob, Grep, LS, WebFetch, WebSearch (every path a file tool reads, under
+            any release's name for it, in file_path or paths: file_path, absolute_path, dir_path, path, and
+            read_many_files' paths and include)
     goose   shell, write, edit, tree, read_image, <extension>__<tool>
             -> Bash, Write, Edit, LS, Read (WebFetch for an http(s) source), mcp__<extension>__<tool> (goose's
             payload names its event `event` and its
@@ -66,6 +69,10 @@ GEMINI_TOOLS = {"run_shell_command": "Bash", "read_file": "Read", "read_many_fil
 # (monitor runs its `command` in a shell, as run_shell_command does; notebook_edit writes `notebook_path`)
 QWEN_TOOLS = {**GEMINI_TOOLS, "edit": "Edit", "grep_search": "Grep", "web_search": "WebSearch", "todo_write": "TodoWrite",
               "agent": "Task", "monitor": "Bash", "notebook_edit": "NotebookEdit"}
+# each release's name for the path a Gemini CLI or Qwen Code file tool reads: Gemini CLI renamed read_file's
+# absolute_path to file_path, the directory tools' path to dir_path and read_many_files' paths to include; Qwen Code
+# kept the old names
+GEMINI_PATH_ARGS = ("file_path", "absolute_path", "notebook_path", "dir_path", "path")
 # a Delete is an Edit, as a Codex patch's Delete File is: the file rules (a credentials file, the transcripts) read it
 CURSOR_TOOLS = {"Shell": "Bash", "Read": "Read", "Write": "Write", "Grep": "Grep", "Delete": "Edit", "Task": "Task", "Edit": "Edit"}
 OPENCODE_TOOLS = {"bash": "Bash", "read": "Read", "write": "Write", "edit": "Edit", "apply_patch": "Edit",
@@ -156,14 +163,20 @@ def tool(harness, name, ti):
                 ti["file_path"] = ti[k]
         return CURSOR_TOOLS.get(name, name), ti
     if harness in ("gemini", "qwen"):
-        for k in ("absolute_path", "notebook_path"):   # Gemini's read_file (Qwen's before 0.13), Qwen's notebook_edit
-            if k in ti and "file_path" not in ti:
-                ti["file_path"] = ti[k]
+        mapped = (QWEN_TOOLS if harness == "qwen" else GEMINI_TOOLS).get(name, name)
+        # every path the tool may read is decided, so a key one release ignores never replaces the one another reads
+        lists = [ti.get(k) for k in (("paths", "include") if name == "read_many_files" else ("paths",))]
+        files = list(dict.fromkeys(f for f in [ti.get(k) for k in GEMINI_PATH_ARGS] + [
+            f for v in lists if isinstance(v, list) for f in v] if isinstance(f, str)))
+        if files and mapped != "Bash":   # a shell command's dir_path is where it runs, not a file it reads
+            ti.setdefault("file_path", files[0])
+            if files != [ti["file_path"]]:
+                ti["paths"] = files
         if name == "web_fetch" and "url" not in ti and isinstance(ti.get("prompt"), str):
             m = re.search(r"https?://\S+", ti["prompt"])
             if m:
                 ti["url"] = m.group(0)
-        return (QWEN_TOOLS if harness == "qwen" else GEMINI_TOOLS).get(name, name), ti
+        return mapped, ti
     if harness == "opencode":
         # the path the tool itself reads decides, never another path key the model sent beside it (OpenCode drops
         # unknown keys before the tool runs, so a decoy `file_path` would be decided but never used)
