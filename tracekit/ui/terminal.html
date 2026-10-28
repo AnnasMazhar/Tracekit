@@ -2888,12 +2888,13 @@
     // every invisible character (controls, format characters such as bidi overrides and TAG characters, line and
     // paragraph separators, and default-ignorable ones such as variation selectors and Hangul fillers; not tab, newline
     // or carriage return) is shown as \uXXXX, or \u{XXXXX} past U+FFFF, so a name or an argument can't hide text or
-    // render as something else. One U+FE0E or U+FE0F right after an emoji character (its text or emoji style: the
-    // VS16 of a warning sign, U+26A0 U+FE0F) stays as it is; any other selector, and every one of a run, is shown
+    // render as something else. One U+FE0E or U+FE0F right after a pictographic character (its text or emoji style:
+    // the VS16 of a warning sign, U+26A0 U+FE0F; not a digit, # or *, which are Emoji too) stays as it is; any other
+    // selector, and every one of a run, is shown
     // lean: a filter clicked on such a name compares the shown text and matches nothing; decode data-* if that matters
-    const esc = s => String(s ?? "").replace(/[&<>"']|(?![\t\n\r]|(?<=\p{Emoji})[\uFE0E\uFE0F](?![\uFE00-\uFE0F\u{E0100}-\u{E01EF}]))[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || "\\u" + (c.codePointAt(0) > 0xffff ? "{" + c.codePointAt(0).toString(16) + "}" : c.codePointAt(0).toString(16).padStart(4, "0"))));
+    const esc = s => String(s ?? "").replace(/[&<>"']|(?![\t\n\r]|(?<=\p{Extended_Pictographic})[\uFE0E\uFE0F](?![\uFE00-\uFE0F\u{E0100}-\u{E01EF}]))[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || "\\u" + (c.codePointAt(0) > 0xffff ? "{" + c.codePointAt(0).toString(16) + "}" : c.codePointAt(0).toString(16).padStart(4, "0"))));
     // the same for text set as textContent, which needs no markup escaped
-    const vis = s => String(s ?? "").replace(/(?![\t\n\r]|(?<=\p{Emoji})[\uFE0E\uFE0F](?![\uFE00-\uFE0F\u{E0100}-\u{E01EF}]))[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu, c => "\\u" + (c.codePointAt(0) > 0xffff ? "{" + c.codePointAt(0).toString(16) + "}" : c.codePointAt(0).toString(16).padStart(4, "0")));
+    const vis = s => String(s ?? "").replace(/(?![\t\n\r]|(?<=\p{Extended_Pictographic})[\uFE0E\uFE0F](?![\uFE00-\uFE0F\u{E0100}-\u{E01EF}]))[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu, c => "\\u" + (c.codePointAt(0) > 0xffff ? "{" + c.codePointAt(0).toString(16) + "}" : c.codePointAt(0).toString(16).padStart(4, "0")));
     const FIELD = Object.assign(Object.create(null), { Bash: "command", Write: "file_path", Edit: "file_path", MultiEdit: "file_path", Read: "file_path", NotebookEdit: "notebook_path", WebFetch: "url", WebSearch: "query", Glob: "pattern", Grep: "pattern", Agent: "description", Task: "description" });
     const FILE_TOOLS = Object.assign(Object.create(null), { Read: "R", Write: "W", Edit: "W", MultiEdit: "W", NotebookEdit: "W" });   // looked up by a tool's name: no prototype
     const SEVERE = new Set(["denied", "out_of_scope_write", "secrets_access"]);

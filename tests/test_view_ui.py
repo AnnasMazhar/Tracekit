@@ -1132,7 +1132,9 @@ class InvisibleCharacters(unittest.TestCase):
         cases = {"\\u26a0\\ufe0f \\u2764\\ufe0f \\u2714\\ufe0f \\u2764\\ufe0e": "\u26a0\ufe0f \u2764\ufe0f \u2714\ufe0f \u2764\ufe0e",
                  "A\\ufe0f": "A\\ufe0f", "\\u2764\\ufe0f\\ufe0f": "\u2764\\ufe0f\\ufe0f",
                  "\\u{1f600}\\ufe0f\\u{e0100}": "\U0001f600\\ufe0f\\u{e0100}",
-                 "\\u{1f600}\\u{e0100}\\u{e0101}\\u{e0102}": "\U0001f600\\u{e0100}\\u{e0101}\\u{e0102}"}
+                 "\\u{1f600}\\u{e0100}\\u{e0101}\\u{e0102}": "\U0001f600\\u{e0100}\\u{e0101}\\u{e0102}",
+                 # digits, # and * are Emoji too (keycap bases): one selector after each hid a byte
+                 "1\\ufe0f #\\ufe0f *\\ufe0e 1\\ufe0f\\u20e3": "1\\ufe0f #\\ufe0f *\\ufe0e 1\\ufe0f⃣"}
         check = f"""
             const cases = {json.dumps(list(cases))}, out = {{}};
             for (const [k, f] of Object.entries(fns)) out[k] = cases.map(c => f(eval('"' + c + '"')));
