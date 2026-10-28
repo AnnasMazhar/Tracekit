@@ -1318,6 +1318,19 @@ class NothingLost(unittest.TestCase):
                                ["WHY DID THIS HAPPEN?", "run", "why", "w1"], ["why run on RUNS", "run", "overview", "w1"],
                                ["why alert", "run", "why", "w1"]])
 
+    def test_the_run_header_names_the_why_run_the_why_view_picked(self):
+        """renderRunHead() ran before renderWhyView(), which picks the why run when none is: a why view opened with no
+        signed run selected had a header reading "no run" until the next render."""
+        needs_node(self)
+        script = self.RENDER.replace("function renderRunHead() {}\n", "").replace(
+            "function renderWhyView() {}\n", "function renderWhyView() { WRUN ??= WHY.runs[0].run_id; }\n")
+        out = json.loads(page_js(self.RENDERED + ["esc", "renderRunHead"], script + """
+            const html = {}, put = (id, h) => { html[id] = h; };
+            show("overview"); render();
+            process.stdout.write(JSON.stringify([PAGE, WRUN, html.runhead]));"""))
+        self.assertEqual(out[:2], ["run", "w1"])
+        self.assertIn("<h1>why log w1</h1>", out[2])
+
     def test_a_viewer_with_only_why_logs_has_a_button_to_their_events(self):
         """With why logs and no v2 runs (tracekit view --why DIR, the why report) the tape drew no kind chips, so the
         why log's TIMELINE had no button (1.4.2's header had one)."""
