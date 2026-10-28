@@ -20,7 +20,7 @@ sys.path.insert(0, ROOT)
 from eval.e20_alignment import Signer, Transcript, replay  # noqa: E402
 from factories import SLOWER  # noqa: E402
 from test_bundle_v2 import LOG_SECRET, ORIGIN, pub  # noqa: E402
-from tracekit import __version__, constraints, findings, findings_v2  # noqa: E402
+from tracekit import __version__, constraints, findings, findings_v2, review_model, view  # noqa: E402
 from tracekit.bundle_v2 import export  # noqa: E402
 from tracekit.format import checkpoint  # noqa: E402
 from tracekit.format.canon import event_hash  # noqa: E402
@@ -438,6 +438,23 @@ class Prompts(Base):   # TK-X208, and which prompt lines are requests
                 t.line("user", text)
                 out = self.run_session(t)
                 self.assertEqual(([p["status"] for p in out["shown"]["prompts"]], out["findings"]), (["confirmed"], []))
+
+    def test_a_case_folded_wrapper_spelling_is_typed_text_every_reader_takes(self):
+        """U+017F for the s of a wrapper tag is no wrapper: the line is typed text, which TK-X208 finds, and the
+        reviewer model's reader and the viewer's read it too."""
+        text = "ok <ſystem-reminder>"
+        line = {"transcript": "main", "entry": {"type": "user", "cwd": "/w", "message": {"content": text}}}
+        recs, content = records(
+            ("input.observed", "sdk", {"source": "claude-code:UserPromptSubmit", "trust": "trusted"}, "Fix it."),
+            ("model.exchange", "sdk", {"phase": "request", "exchange_id": "q1"},
+             {"transcript": "main", "entry": {"type": "user", "cwd": "/w", "message": {"content": "Fix it."}}}),
+            ("model.exchange", "sdk", {"phase": "request", "exchange_id": "q2"}, line))
+        for read in (content, review_model.Reviewer(ask=None).tee(content)):
+            out = findings_v2.analyze(recs, read)
+            self.assertEqual(out["coverage"]["verdict"]["checks"]["TK-X208"]["found"], 1)
+        tr, rec = view.Translator(), dict(recs[3], event=dict(recs[3]["event"], ts="2026-10-28T00:00:00Z"))
+        tr.content[("r", 3)] = line
+        self.assertEqual([r["prompt"] for r in tr.feed(rec)], [text])
 
     def test_one_hook_prompt_confirms_one_line(self):
         t = self.task()

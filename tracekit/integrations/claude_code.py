@@ -441,7 +441,7 @@ def _wrapped(agent):
             rf'<({tags})[\s>]'
             r'|(?:Another Claude session|A peer session|The coordinator) sent a message'
             r'(?: while you were working)?:'
-            r'|Base directory for this skill:', re.IGNORECASE)
+            r'|Base directory for this skill:', re.IGNORECASE | re.ASCII)
     if agent == "gemini-cli":
         return re.compile(r'--- Content from referenced files ---')
     return re.compile(r'(?!)')
