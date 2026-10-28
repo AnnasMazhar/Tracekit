@@ -807,9 +807,9 @@ def handle(p):
         try:
             sc = system_config() or {}
             if sc and not sc.get("signer") and not os.environ.get("TRACEKIT_SIGNER"):   # v1 system mode: no v2 signer
+                from tracekit.doctor import REINIT   # system mode's init (docs/deploy.md); a rare path, loaded here
                 fix = (". This host is in v1 system mode (the system config names no v2 signer): set up v2 system "
-                       "mode, sudo /usr/bin/python3 -m tracekit init --v2 --user <agent-user> (--no-hooks with the "
-                       "Claude Code plugin)")
+                       f"mode, {REINIT} (--no-hooks with the Claude Code plugin)")
             closed = bool(sc.get("signer")) or not fail_open(   # system mode: always closed
                 (_load(_state(sid)) or {}).get("fail_modes"), _tool_class(p.get("tool_name") or "?"))
         except Exception:

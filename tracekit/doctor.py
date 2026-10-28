@@ -32,8 +32,11 @@ OK, WARN, FAIL = "ok", "warn", "fail"
 NETWORK_FS = {"nfs", "nfs4", "cifs", "smb", "smb3", "smbfs", "afpfs", "webdav", "fuse", "fuseblk", "9p", "macfuse",
               "osxfuse"}
 MAX_SKEW_S = 300
-REINIT = "sudo /usr/bin/python3 -m tracekit init --v2 --user <agent-user>" + (
-    " --experimental-macos" if sys.platform == "darwin" else "")   # init refuses macOS system mode without it
+# system mode's init from a root-owned clone of the release, as the plugin and CI run it: it works on every Python,
+# whether or not /opt/tracekit exists or can be trusted (docs/deploy.md also gives the routes through /opt's venv)
+REINIT = ("from a root-owned clone of the release (docs/deploy.md#laptop-system-mode), sudo /usr/bin/python3 -m tracekit "
+          "init --v2 --user <agent-user>" + (" --experimental-macos" if sys.platform == "darwin" else ""))
+ROOT_DOCTOR = "run doctor as root (system mode: sudo /opt/tracekit/bin/python -I -m tracekit doctor)"
 FAIL_CLOSED = "call blocked (fail-closed)"   # the pre-tool wrapper's words (install._blocking); before 1.3 every event's
 # wrapper had them, so a hook that couldn't run blocked a prompt or a tool result too (D-HOOKS-EVENT warns)
 
@@ -499,7 +502,7 @@ def v2_checks(config, profile="production", agent=None, settings=None, signer=No
         names = None
         fresh = not prod and e.errno == errno.ENOENT   # a dev signer that never started has no keys yet
         add("D-KEYS-MODE", False, f"cannot inspect {keys}: {e.strerror}",
-            "start the dev signer: tracekit up" if fresh else "run doctor as root (sudo tracekit doctor)", bad=WARN)
+            "start the dev signer: tracekit up" if fresh else ROOT_DOCTOR, bad=WARN)
 
     try:
         content = service.content_config(cfg.get("content"))   # as the signer validates it
@@ -560,7 +563,7 @@ def v2_checks(config, profile="production", agent=None, settings=None, signer=No
         hits = agent_access(agent, targets)
         if hits is None:
             add("D-AGENT-PROBE", False, f"not probed: doctor runs as neither root nor {agent.pw_name}",
-                "run doctor as root (sudo tracekit doctor)", bad=WARN)
+                ROOT_DOCTOR, bad=WARN)
         else:
             add("D-AGENT-PROBE", not hits, f"{agent.pw_name} can " + ", ".join(f"{m} {p}" for p, m in hits) if hits
                 else f"{agent.pw_name} can neither read the keys and store nor write the signer's files",

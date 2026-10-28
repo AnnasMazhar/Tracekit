@@ -1342,7 +1342,8 @@ class V1SystemMode(unittest.TestCase):
                                                  "tool_name": "Bash"}), 2)
             self.assertEqual(claude_code.handle({"hook_event_name": "Stop", "session_id": "s"}), 1)
         self.assertEqual(err.getvalue().count("v1 system mode"), 2)
-        self.assertEqual(err.getvalue().count("sudo /usr/bin/python3 -m tracekit init --v2 --user <agent-user>"), 2)
+        from tracekit.doctor import REINIT   # the init that works for this Python
+        self.assertEqual(err.getvalue().count(REINIT), 2)
 
 
 class StateReads(unittest.TestCase):
