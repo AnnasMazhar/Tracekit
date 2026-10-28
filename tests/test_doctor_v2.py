@@ -509,6 +509,13 @@ class DevFresh(unittest.TestCase):
         self.assertIn("assurance stays dev", got["D-WITNESS-CONFIGURED"]["detail"])
         self.assertIn("the dev signer takes no witnesses", got["D-WITNESS-CONFIGURED"]["fix"])
 
+    def test_keys_it_cannot_read_name_the_doctor_command_root_can_run(self):
+        """System-mode init puts no `tracekit` command on root's PATH, so the fix `sudo tracekit doctor` found none."""
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        got = {r["id"]: r for r in doctor.v2_checks({"data_dir": d})}
+        self.assertIn("sudo /opt/tracekit/bin/python -I -m tracekit doctor", got["D-KEYS-MODE"]["fix"])
+
     def test_without_witnesses_assurance_is_local_only_with_an_anchor(self):
         """A production signer with no witness said assurance stays local; the verifier says dev without an anchor."""
         d = tempfile.mkdtemp()

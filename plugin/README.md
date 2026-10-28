@@ -65,7 +65,7 @@ switches you over:
 - **v1 dev mode** (`tracekit init --dev --no-hooks`): the next hook starts the v2 dev signer. Your v1 policy no longer
   applies (the v2 coding pack does), `tracekit pending` and `tracekit approve` no longer see held calls (use
   `tracekit approvals`), and once the v2 signer has recorded something, the v1 ledger can't be bridged into it.
-- **v1 system mode** (`sudo tracekit init --no-hooks`): every tool call is blocked until v2 system mode is set up. The
+- **v1 system mode** (`tracekit init --no-hooks` as root): every tool call is blocked until v2 system mode is set up. The
   hook's error says so.
 
 Before the next Claude Code session after the update:

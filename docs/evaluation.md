@@ -217,7 +217,7 @@ pull request and blocks the merge on a miss. Results: `eval/results/e8_insider.j
 | E8.7 | fabricate a second run from inside a live harness session | `concurrent_run` gap |
 | E8.8 | write into the live run from a process outside its harness session | refused and recorded |
 
-Run it yourself as root after `sudo tracekit init --user AGENT --harness agent=HARNESS` (the script's docstring has the
+Run it yourself as root after `sudo /usr/bin/python3 -m tracekit init --user AGENT --harness agent=HARNESS` (the script's docstring has the
 setup). E8 does not cover fabricated events sent into the live run from inside the harness session; only the model
 proxy cross-check catches those.
 

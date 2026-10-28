@@ -13,7 +13,7 @@ experimental.
 | Surface | What it covers |
 |---|---|
 | v2 signer, dev mode | `tracekit.instrument()`, `tracekit up/down/last`, `tracekit signer serve --dev`, file storage |
-| v2 signer, system mode on Linux | `sudo tracekit init --v2 --user AGENT`: the signer as its own OS user, file storage, uid and token callers |
+| v2 signer, system mode on Linux | `tracekit init --v2 --user AGENT` as root ([laptop system mode](deploy.md#laptop-system-mode)): the signer as its own OS user, file storage, uid and token callers |
 | Python SDK | `tracekit.sdk` (`RunHandle`) and `tracekit.instrument()` |
 | Framework integrations | OpenAI Agents SDK, LangChain / LangGraph, Claude Agent SDK, MCP client wrapping: each runs the adapter contract against the pinned real library on every push to main and every pull request |
 | Claude Code hooks (v2) | `tracekit init --dev --v2` and system mode's hooks |

@@ -1141,7 +1141,7 @@ def migrate_system(fail_mode=None, harnesses=None):
     if not sys.platform.startswith("linux"):
         raise SystemExit("migrate --system: system mode is Linux-only in 0.2.1")
     if os.geteuid() != 0:
-        raise SystemExit("migrate --system needs root: sudo tracekit migrate --system")
+        raise SystemExit(f"migrate --system needs root: sudo {OPT_PYTHON} -I -m tracekit migrate --system")
     signer_cfg = os.path.join(SYS_HOME, "config.json")
     if not os.path.exists(signer_cfg):
         raise SystemExit(f"no system-mode signer at {SYS_HOME}; run `sudo /usr/bin/python3 -m tracekit init --user <agent-user>` instead")
@@ -1309,7 +1309,8 @@ def v1_results(checks=None):
         try:
             if sys.platform.startswith("linux") and read_json(os.path.join(SYS_HOME, "config.json")).get("harnesses"):
                 from .doctor import helper_result
-                helper = [helper_result(os.path.join(SYSTEMD_DIR, V1_HELPER + ".service"), "sudo tracekit migrate --system")]
+                helper = [helper_result(os.path.join(SYSTEMD_DIR, V1_HELPER + ".service"),
+                                        f"sudo {OPT_PYTHON} -I -m tracekit migrate --system")]
         except (OSError, ValueError, AttributeError):   # no or unreadable signer config: the other checks say so
             pass
         for h in _installed_hooks():
@@ -1318,7 +1319,8 @@ def v1_results(checks=None):
         try:
             sc = client.system_config()
         except client.SystemConfigError as e:
-            return out + [result("D-SYSTEM-CONFIG", FAIL, f"system mode: {e}", "sudo tracekit init --user <agent-user>")]
+            return out + [result("D-SYSTEM-CONFIG", FAIL, f"system mode: {e}",
+                                 "sudo /usr/bin/python3 -m tracekit init --user <agent-user>")]
         if sc is None:
             return out + [result("D-SYSTEM-CONFIG", FAIL, f"system mode: {client.SYSTEM_CONFIG} is missing or not "
                                  "root-owned", "sudo /usr/bin/python3 -m tracekit init --user <agent-user>")]
@@ -1328,7 +1330,7 @@ def v1_results(checks=None):
                   ("runtime", OPT, reinstall), ("unit file", _unit_path(), reinstall),
                    ("policy file", sc.get("policy") or DEFAULT_POLICY,
                     "make it and every directory above it root-owned and not group/world-writable (sudo chown root:root, "
-                    "sudo chmod go-w), then sudo tracekit migrate --system")]
+                    f"sudo chmod go-w), then sudo {OPT_PYTHON} -I -m tracekit migrate --system")]
     for label, path, fix in checks:
         bad = trusted_file(path)
         if bad is None and os.path.isdir(path):
@@ -1349,7 +1351,9 @@ def _require_system(experimental_macos):
                          f"yet validated on hardware ({wiki_url('docs/portability.md')}). Re-run with --experimental-macos to use it, "
                          "or use `tracekit init --dev`.")
     if os.geteuid() != 0:
-        raise SystemExit("system mode needs root: sudo tracekit init   (or tracekit init --dev for a same-user signer)")
+        raise SystemExit("system mode needs root: run it as root from a root-owned Python "
+                         f"({wiki_url('docs/deploy.md', 'laptop-system-mode')}), or use tracekit init --dev "
+                         "for a same-user signer")
     return darwin
 
 
@@ -1465,7 +1469,7 @@ def v2_plist(user):
 def init_system_v2(target_user, approver=None, policy=None, project=None, no_service=False, hooks=True,
                    experimental_macos=False, allow_privileged=False, agent="claude", harnesses=(), public_witness=False,
                    egress=False, thinking=True):
-    """`sudo tracekit init --v2 --user AGENT`: the v2 signer service as its own user, from the root-owned venv, with
+    """`tracekit init --v2 --user AGENT` as root: the v2 signer service as its own user, from the root-owned venv, with
     the v2 hook of `agent` (Claude Code, or a harness of tracekit.agent_hooks) for AGENT. Approvals are answered only by `approver` (default: the admin who ran sudo), a
     different uid from the agent's. harnesses (`--harness [NAME=]PATH`): the agent's runs must come from one of them,
     which the harness helper attests. public_witness (`--public-witness`): the public witness cosigns the signer's logs.
@@ -1586,9 +1590,9 @@ def init_system_v2(target_user, approver=None, policy=None, project=None, no_ser
 
 
 def uninstall_system_v2(purge=False):
-    """`sudo tracekit uninstall --v2`: remove the service, signer.yaml, the system config's v2 keys (the file, and the
-    venv, unless v1 system mode still uses them) and the agent's hooks. purge: also the signer's data dir (its keys and
-    log) and its user, and the tailer's user. Returns what was kept."""
+    """`tracekit uninstall --v2` as root: remove the service, signer.yaml, the system config's v2 keys (the file, and
+    the venv, unless v1 system mode still uses them) and the agent's hooks. purge: also the signer's data dir (its keys
+    and log) and its user, and the tailer's user. Returns what was kept."""
     darwin = _require_system(True)
     sc = client.system_config() or {}
     h = sc.get("hooks") or {}

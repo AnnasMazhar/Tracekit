@@ -1580,8 +1580,9 @@ class SignerService:
                                 "recorded: read the log itself for it, and restart `tracekit follow`"
                                 if run["source"] == "import" else
                                 "the transcript tailer stopped, was killed or never started; what the transcript says "
-                                "after that is not recorded: read the transcript itself for it, and run `sudo tracekit "
-                                "doctor` to check the tailer")}, source="signer")
+                                "after that is not recorded: read the transcript itself for it, and run `sudo "
+                                "/opt/tracekit/bin/python -I -m tracekit doctor` to check the tailer")},
+                            source="signer")
                     lost.append(key)
                 for obs, at in watched.get(key, {}).items():
                     if t - at >= TAILER_LOST_S:
