@@ -554,6 +554,27 @@ class View(unittest.TestCase):
         self.assertEqual([r["tool_use_id"] for r in json.loads(body)["rows"] if r["event"] == "PreToolUse"],
                          ["c1", "c2", "c3"])
 
+    @pytest.mark.unverified_bundles
+    def test_a_record_export_cannot_read_fails_the_run(self):
+        """A record edited into a shape export doesn't expect (no data, data a number, type a list) raised out of the
+        watcher's check: the run read NOT CHECKED, with no retraction, where an edit of its records is FAILED."""
+        run_id = self.finished_run()
+        self.service.close()
+        path = os.path.join(self.d, "store", "records.jsonl")
+        with open(path, "rb") as f:
+            lines = f.read().split(b"\n")
+        at = next(i for i, x in enumerate(lines) if b'"decision":"deny"' in x)
+        for edit in (lambda e: e.pop("data"), lambda e: e.update(data=5), lambda e: e.update(type=[e["type"]])):
+            rec = json.loads(lines[at])
+            edit(rec["event"])
+            with open(path, "wb") as f:
+                f.write(b"\n".join(lines[:at] + [json.dumps(rec, separators=(",", ":")).encode()] + lines[at + 1:]))
+            feed = store_feed(self, {"data_dir": self.d})
+            row = self.report(feed, run_id)[-1]
+            self.assertEqual((row["review"]["verdict"], row["title"]), ("failed", f"RUN {run_id} · Integrity FAILED"))
+            self.assertIn("a record of the run can't be read", row["text"])   # the report's failing check
+            self.assertEqual([r for r in self.rows(feed, run_id) if not r.get("analysis")], [])
+
     def test_rows_of_a_record_export_cannot_read_are_refused_not_a_dropped_connection(self):
         """A record edited into a shape export doesn't expect (no data, data a number, type a list) raised KeyError or
         TypeError out of /api/rows: the server closed the connection with no response, on every request for the run."""

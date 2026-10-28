@@ -1257,10 +1257,12 @@ def check(reader, tenant, run_id, note, trust, out, memo=None):
         export(reader, tenant, run_id, note, out)
         verified, rep, code = bundle_records(out, trust, memo)
         records = verified.get(run_id, [])
-    except ValueError as e:   # the store does not match its own checkpoint
+    # the store does not match its own checkpoint, or holds a record export can't read (an edit): both fail the run
+    except (ValueError, KeyError, TypeError, AttributeError, IndexError) as e:
         rep, code = v2.Report(), v2.EXIT_FAIL
         rep.integrity, rep.assurance = "FAILED", "none"
-        rep.check("export", False, str(e))
+        rep.check("export", False, str(e) if isinstance(e, ValueError) else
+                  f"a record of the run can't be read ({type(e).__name__}): the store was edited")
     text = io.StringIO()
     v2.print_report(rep, code, text)
     return rep, code, text.getvalue(), records
