@@ -67,7 +67,8 @@ failure report (a run that verified at an earlier checkpoint and fails at a late
 its earlier report and findings, taken back); `ERROR` means the viewer could not check the run (its NOT CHECKED row
 says why; it tries again five minutes later or when the run grows); `PENDING` means no checkpoint covers the run's
 records yet. A viewer that stops checking runs altogether says `STOPPED`, not `LIVE`, with the reason, until it
-restarts, and a selected run that verified reads `VERIFIED · CHECKS STOPPED`, no longer green. A run still being written is shown up to the newest
+restarts, and every mark of a run that verified (the run chip, its verdict, EVIDENCE's stamp, HORIZON's chain) reads
+`VERIFIED · CHECKS STOPPED`, no longer green. A run still being written is shown up to the newest
 checkpoint and grows with each one; a long run is checked again no sooner than four times its last check's time. A run
 that stopped growing is checked again five minutes after its last check, one run at a time, so a later edit of its
 records turns it `FAILED`. Past 50,000 rows (`TRACEKIT_OBSERVE_MAX_RECORDS`) the oldest leave the live view and the tape

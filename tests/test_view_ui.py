@@ -629,7 +629,7 @@ class Evidence(unittest.TestCase):
                 {"event": "tk_alert", "session_id": "r1", "tk_seq": None, "analysis": True, "title": "RUN r1"},
                 page_rec(9, "tk_model", "model.exchange")]
         out = json.loads(page_js(["tuid", "WALK_MAX", "evidenceOf"], f"""
-            const recs = {json.dumps(recs)}, S = {{ actions: new Map([["r1|c1", {{ tool: "send_email", target: "to a@b", pre: recs[1] }}]]) }};
+            const recs = {json.dumps(recs)}, S = {{ actions: new Map([["r1|c1", {{ tool: "send_email", target: "to a@b", pre: recs[1] }}]]) }}, STOPPED = "";
             const of = r => {{ const e = evidenceOf(r, recs); return [e.ok, e.stamp, e.total, e.rows.map(x => [x.seq, x.what, x.type, x.hash.slice(-2)]),
                                                                    e.checks.map(c => [c.status, c.check, c.detail, c.problems])]; }};
             const many = Array.from({{ length: 2005 }}, (_, i) => ({{ tk_seq: i, event: "tk_note", title: "n" }}));
@@ -663,7 +663,7 @@ class Evidence(unittest.TestCase):
             const S = {{ recs: {json.dumps(recs)}, actions: new Map() }}, RUNS = new Map(), el = {{}}, html = {{}};
             const $ = id => el[id] ??= {{}}, put = (id, h) => {{ html[id] = h; }};
             const runCmds = r => ["tracekit export --v2 --run " + r.id, "tracekit verify " + r.id + ".tkb"], reviewHtml = (r, cmds) => `<REVIEW cmds=${{cmds}}>`;
-            let scope = "r1"; const seen = [];
+            let scope = "r1", STOPPED = ""; const seen = [];
             for (const verdict of ["verified", "failed"]) {{
               RUNS.set("r1", {{ id: "r1", verdict, records: 2, decisions: {{}}, report: {json.dumps(VERIFIED_REPORT)} }});
               evidenceView(); seen.push(html.whyv);
@@ -1016,7 +1016,7 @@ class Horizon(unittest.TestCase):
         recs = [why_call(i, "w", 100 + i) for i in range(1, 4)]
         out = json.loads(page_js(["dict", "FIELD", "FILE_TOOLS", "subject", "rel", "category", "ANSWER", "lseq", "vis", "treeOrder", "HZMAX",
                                   "hzRad", "hzPath", "hzPlace", "hzRest", "hzData", "hzChain"], f"""
-            const ALL = {json.dumps(recs)}, RUNS = new Map(), V2 = false, chainState = {{ ok: true, n: 0 }};
+            const ALL = {json.dumps(recs)}, RUNS = new Map(), V2 = false, chainState = {{ ok: true, n: 0 }}, STOPPED = "";
             let hzKey = [], hzD = null;
             const D = hzData();
             process.stdout.write(JSON.stringify([[...new Set(D.ev.map(e => e.gr))], hzChain(D.ev), hzChain([])]));"""))
@@ -1191,6 +1191,30 @@ class RunChip(unittest.TestCase):
         self.assertEqual(out, [["chain ok", "RUN \u2713 VERIFIED", "VERIFIED \u00b7 operator-side"],
                                ["chain", "RUN \u2713 VERIFIED \u00b7 CHECKS STOPPED",
                                 "VERIFIED \u00b7 operator-side \u00b7 verification stopped: the store can't be checked"]])
+
+    def test_every_verified_indicator_reads_checks_stopped_while_the_viewer_checks_nothing(self):
+        """The run chip said checks stopped, but the verdict chips (run header, RUNS, panel 1, a call's detail, the run
+        review), EVIDENCE's stamp and HORIZON's HUD still read a green VERIFIED."""
+        needs_node(self)
+        out = json.loads(page_js(["esc", "vchip", "tuid", "WALK_MAX", "evidenceOf", "hzChain"], """
+            const S = { actions: new Map() }, seen = [];
+            let STOPPED = "";
+            for (const s of ["", "verification stopped: the store can't be checked"]) {
+              STOPPED = s;
+              seen.push([vchip("verified", "VERIFIED"), vchip("failed"), evidenceOf({ verdict: "verified" }, []).stamp,
+                         hzChain([{ gr: "signed" }])]);
+            }
+            process.stdout.write(JSON.stringify(seen));"""))
+        self.assertEqual(out[0], ['<span class="vchip verified" title="VERIFIED">VERIFIED</span>',
+                                  '<span class="vchip failed" title="">FAILED</span>', ["ok", "VERIFIED"],
+                                  ["\u2713 VERIFIED", "ok"]])
+        self.assertEqual(out[1], ['<span class="vchip stopped" title="VERIFIED \u00b7 verification stopped: the store can&#39;t '
+                                  'be checked">VERIFIED \u00b7 CHECKS STOPPED</span>',
+                                  '<span class="vchip failed" title="">FAILED</span>', ["wait", "VERIFIED \u00b7 CHECKS STOPPED"],
+                                  ["\u2713 VERIFIED \u00b7 CHECKS STOPPED", "warn"]])
+        # every verdict chip the page draws is vchip's: none builds its own from the verdict
+        self.assertEqual(PAGE.count('class="vchip ${esc('), 1)
+        self.assertEqual(len(re.findall(r"\bvchip\(\w+\.verdict", PAGE)), 5)
 
 
 class NothingLost(unittest.TestCase):
