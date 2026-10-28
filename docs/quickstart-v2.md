@@ -15,6 +15,22 @@ pip install tracekit-ai
 That is all the dev signer needs (`tracekit-ai[signer]` still works and installs the same). Auditors who only verify
 bundles can take the verifier alone, which runs on the standard library: `pip install --no-deps tracekit-ai`.
 
+Some Pythons refuse `pip install` outside a venv (PEP 668: `error: externally-managed-environment`): Debian 12, Ubuntu
+23.04 and later, and Homebrew's Python. Install it one of these ways instead:
+
+```sh
+python3 -m venv .venv && .venv/bin/pip install tracekit-ai   # a venv (Debian, Ubuntu: sudo apt install python3-venv first)
+pipx install tracekit-ai                                     # the CLI only, nothing to import
+uv tool install tracekit-ai                                  # the CLI only, nothing to import
+```
+
+Step 2 imports Tracekit in your agent's process, so an SDK agent needs it in its own environment: run the agent with
+that venv's Python (`. .venv/bin/activate` also puts `tracekit` on your `PATH`), or `pip install tracekit-ai` in the
+venv the agent already has. pipx and `uv tool` give you the `tracekit` command
+(`tracekit last`, `tracekit view`, `tracekit approvals`, and `tracekit init --dev --v2` for Claude Code, whose hooks
+then run from that install), but nothing your agent can import. The command and the SDK can come from two installs:
+both use the same dev signer. Keep them at the same version.
+
 ## 2. One line in your agent
 
 ```python
