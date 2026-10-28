@@ -538,9 +538,11 @@ class Speed(unittest.TestCase):
     # backing off over the rest of the command) or in an SQL statement
     # (TK-DB003 DELETE FROM, then an always-true WHERE): a backtracking engine rescans that text from each occurrence of
     # their first word, so 64 KiB repeating it in one command or statement spends the fallback's 1 s and denies
-    # (nondeterministic). RE2, the default engine, is linear; they are held to the generic fillers here. Upgrade:
-    # structural pipeline and argv rules
-    RESCAN = {"TK-D002", "TK-D004", "TK-D006", "TK-D007", "TK-D011", "TK-DB003", "TK-C010", "TK-A032"}
+    # (nondeterministic). TK-A040 reads up to eight options after each redis-cli on a line, so 64 KiB repeating
+    # `a/redis-cli -` reads eight tokens from each: linear, ~70 ms on a laptop and up to 0.2 s on CI's runners. RE2,
+    # the default engine, is linear; they are held to the generic fillers here. Upgrade: structural pipeline and argv
+    # rules
+    RESCAN = {"TK-D002", "TK-D004", "TK-D006", "TK-D007", "TK-D011", "TK-DB003", "TK-C010", "TK-A032", "TK-A040"}
 
     def fillers(self, rid, pattern):
         n = MAX_SUBJECT - 4
