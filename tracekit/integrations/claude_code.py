@@ -38,7 +38,7 @@ lockfiles) would ask too often; `tracekit analyze --v2` checks it. The session s
 sent, so an unreachable signer loses none), and a later run of the session (after an idle close) gets them all again. A
 constraint can only hold more calls, so the agent's own identity adding one (it could add its own) weakens nothing: past
 the signer's cap of file constraints a further one is refused and every write of the run is held from then on, which the
-hook tells the person (exit 1, FULL on stderr).
+hook tells the person (exit 1, FULL on stderr, and in the prompt's notice when it prints one).
 
 System mode: the signer runs as its own user and the hook reaches it only through the socket the root-owned
 /etc/tracekit/client.json names (a TRACEKIT_SIGNER naming another is refused, and the call blocked); the signer
@@ -724,8 +724,8 @@ def _handle(client, p, event, sid, tid):
             messages.append(f"[tracekit] oversized untrusted text was cut after {MAX_HARNESS_TEXT} characters "
                             f"({', '.join(cut)}); values in the cut text are not marked untrusted, so a "
                             f"from: untrusted rule won't hold a call that uses them")
-        if messages and AGENT == "claude-code":
-            print(json.dumps({"systemMessage": "\n".join(messages)}))
+        if messages and AGENT == "claude-code":   # Claude Code then shows this, not stderr: FULL goes here too
+            print(json.dumps({"systemMessage": "\n".join([FULL] * bool(refused) + messages)}))
         return 1 if refused else 0   # shown to the person (FULL, on stderr), never blocking the prompt
     # SessionStart, or any other first event of the session, registers the run; a resumed (or forked) session's
     # transcript holds its earlier history, which earlier runs recorded

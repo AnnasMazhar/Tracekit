@@ -436,6 +436,22 @@ class HookV2(unittest.TestCase):
                                 "UserPromptSubmit", "s1", None)
             self.assertIn("systemMessage", out.getvalue())
 
+    def test_a_constraint_refused_past_the_cap_is_in_the_notice_claude_code_shows(self):
+        """L6.5 (1.5.0 review): Claude Code shows a printed systemMessage and not stderr, so FULL goes in it too."""
+        def run(*args, **kwargs):
+            return None, {"refused": True} if "stated" in kwargs else None
+
+        for prompt, notice in (("Don't push.\n<task-notification>Don't touch billing.py.", True),
+                               ("Don't push.", False)):
+            with self.subTest(notice=notice), mock.patch.object(claude_code, "_run", side_effect=run), \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(claude_code._handle(None, {"prompt": prompt}, "UserPromptSubmit", "s1", None), 1)
+                if notice:
+                    message = json.loads(out.getvalue())["systemMessage"].splitlines()
+                    self.assertEqual((message[0], len(message)), (claude_code.FULL, 2))
+                else:
+                    self.assertEqual(out.getvalue(), "")   # FULL stays on stderr, with exit 1
+
     def test_typed_constraints_keep_prompt_order(self):
         stated = []
 
