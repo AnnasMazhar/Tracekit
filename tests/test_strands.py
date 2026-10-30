@@ -635,9 +635,10 @@ class VersionCheck(unittest.TestCase):
                 warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             Tracekit(mock.Mock())
-        msgs = [str(x.message) for x in w]
-        self.assertEqual(1, len([m for m in msgs if "is wired but untested" in m]))
-        self.assertIn("Strands Agents 0.0.1 is wired but untested; Tracekit is tested with strands-agents>=1.61,<1.62", msgs[0])
+        msgs = [str(x.message) for x in w if "is wired but untested" in str(x.message)]
+        self.assertEqual(1, len(msgs))
+        self.assertIn("Strands Agents 0.0.1 is wired but untested; Tracekit is tested with "
+                      "strands-agents>=1.61,<1.62", msgs[0])
 
     def test_it_does_not_warn_for_a_version_inside_the_tested_range(self):
         from tracekit.integrations import version_check

@@ -649,8 +649,8 @@ class VersionCheck(unittest.TestCase):
                 warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             Tracekit(mock.Mock())
-        msgs = [str(x.message) for x in w]
-        self.assertEqual(1, len([m for m in msgs if "is wired but untested" in m]))
+        msgs = [str(x.message) for x in w if "is wired but untested" in str(x.message)]
+        self.assertEqual(1, len(msgs))
         self.assertIn("Google ADK 0.0.1 is wired but untested; Tracekit is tested with google-adk>=2.12,<2.13", msgs[0])
 
     def test_it_does_not_warn_for_a_version_inside_the_tested_range(self):

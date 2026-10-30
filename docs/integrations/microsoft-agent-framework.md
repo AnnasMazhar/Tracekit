@@ -15,8 +15,8 @@ pip install tracekit-ai "agent-framework-core>=1.22,<1.23" agent-framework-opena
 
 Tested with Agent Framework 1.22 (`agent-framework-core`), which needs Python 3.10+; other minors may change how
 middleware runs, and building `Tracekit(run)` with one warns. Pick the package for your model provider
-(`agent-framework-openai`,
-`agent-framework-anthropic`, `agent-framework-foundry`, ...); the middleware itself needs only the core.
+(`agent-framework-openai`, `agent-framework-anthropic`, `agent-framework-foundry`, ...); the middleware itself needs
+only the core.
 
 ## Setup
 

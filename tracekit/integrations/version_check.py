@@ -1,11 +1,5 @@
-"""The version check the hand-wired integrations share.
-
-`tracekit.instrument()` warns for the frameworks it wires itself: a version outside the tested range is wired but
-untested. The five integrations built by hand (Microsoft Agent Framework, Google ADK, Haystack, LlamaIndex, Strands
-Agents) got no such warning, so a framework minor that moved a hook or changed a callback's arguments failed in ways
-that were hard to trace back to the version. This module holds the one check they share: it reads the installed
-version and warns, once per process, when it is outside the range Tracekit is tested with.
-"""
+"""The version check the integrations built by hand share: building one warns, once per process per framework, when
+the installed framework is outside the versions Tracekit is tested with, as `tracekit.instrument()` does."""
 import threading
 import warnings
 
@@ -25,7 +19,7 @@ def warn_untested(label, dist, lo, hi, req):
     """
     try:
         version = _version(dist)
-        if version is None:
+        if not version:
             return
         if lo <= _release(version) < hi:
             return

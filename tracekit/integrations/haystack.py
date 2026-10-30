@@ -25,8 +25,7 @@ from haystack.components.agents.state import replace_values
 from haystack.dataclasses import ChatMessage
 
 from tracekit.format.canon import event_hash, loads_strict
-from tracekit.integrations import said
-from tracekit.integrations import version_check
+from tracekit.integrations import said, version_check
 from tracekit.integrations.gate import gate_call, run_handle
 from tracekit.sdk.client import result_field
 

@@ -16,7 +16,7 @@ class Check(unittest.TestCase):
                 warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             version_check.warn_untested("Fine", "fine", (1,), (2,), "fine>=1,<2")
-        msgs = [str(x.message) for x in w]
+        msgs = [str(x.message) for x in w if "is wired but untested" in str(x.message)]
         self.assertEqual(1, len(msgs))
         self.assertIn("Fine 2.0 is wired but untested; Tracekit is tested with fine>=1,<2", msgs[0])
 
@@ -26,7 +26,7 @@ class Check(unittest.TestCase):
                 warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             version_check.warn_untested("Fine", "fine", (1,), (2,), "fine>=1,<2")
-        self.assertEqual([], [str(x.message) for x in w])
+        self.assertEqual([], [str(x.message) for x in w if "is wired but untested" in str(x.message)])
 
     def test_it_warns_only_once_per_process(self):
         with mock.patch.object(version_check, "_WARNED", set()), \
@@ -38,12 +38,13 @@ class Check(unittest.TestCase):
         self.assertEqual(1, len([x for x in w if "is wired but untested" in str(x.message)]))
 
     def test_it_does_not_warn_when_the_version_cannot_be_read(self):
-        with mock.patch.object(version_check, "_WARNED", set()), \
-                mock.patch.object(version_check, "_version", return_value=None), \
-                warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            version_check.warn_untested("Fine", "fine", (1,), (2,), "fine>=1,<2")
-        self.assertEqual([], [str(x.message) for x in w])
+        for version in (None, ""):   # "" is how instrument() reads a framework that isn't installed
+            with self.subTest(version=version), mock.patch.object(version_check, "_WARNED", set()), \
+                    mock.patch.object(version_check, "_version", return_value=version), \
+                    warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                version_check.warn_untested("Fine", "fine", (1,), (2,), "fine>=1,<2")
+            self.assertEqual([], [str(x.message) for x in w if "is wired but untested" in str(x.message)])
 
     def test_it_never_raises_when_the_version_cannot_be_read(self):
         with mock.patch.object(version_check, "_WARNED", set()), \

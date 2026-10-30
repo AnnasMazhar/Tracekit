@@ -23,8 +23,7 @@ from pydantic_core import to_jsonable_python
 
 from tracekit.autowire import DECIDED_UPSTREAM
 from tracekit.format.canon import loads_strict
-from tracekit.integrations import said
-from tracekit.integrations import version_check
+from tracekit.integrations import said, version_check
 from tracekit.integrations.gate import complete, gate_call, run_handle
 from tracekit.sdk.client import result_field
 
